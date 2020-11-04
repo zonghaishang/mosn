@@ -203,12 +203,17 @@ type wasmContext struct {
 	instance *wasm.Instance
 }
 
-func initWasm(path string) *wasm.Instance {
-	bytes, _ := wasm.ReadBytes(path)
-	module, err := wasm.Compile(bytes)
-	ver := wasm.WasiGetVersion(module)
+var wasmCode []byte
+var wasmModule wasm.Module
+var wasiVersion wasm.WasiVersion
+var wasmImportObj *wasm.ImportObject
 
-	importObject := wasm.NewDefaultWasiImportObjectForVersion(ver)
+func initWasm(path string) {
+	wasmCode, _ = wasm.ReadBytes(path)
+	wasmModule, _ = wasm.Compile(wasmCode)
+	wasiVersion = wasm.WasiGetVersion(wasmModule)
+
+	wasmImportObj = wasm.NewDefaultWasiImportObjectForVersion(wasiVersion)
 
 	im := wasm.NewImports()
 	im, _ = im.AppendFunction("proxy_log", proxy_log, C.proxy_log)
@@ -218,9 +223,11 @@ func initWasm(path string) *wasm.Instance {
 	im, _ = im.AppendFunction("proxy_replace_header_map_value", proxy_replace_header_map_value, C.proxy_replace_header_map_value)
 	im, _ = im.AppendFunction("proxy_add_header_map_value", proxy_add_header_map_value, C.proxy_add_header_map_value)
 
-	err = importObject.Extend(*im)
+	wasmImportObj.Extend(*im)
+}
 
-	instance, err := module.InstantiateWithImportObject(importObject)
+func NewWasmInstance() *wasm.Instance {
+	instance, err := wasmModule.InstantiateWithImportObject(wasmImportObj)
 	if err != nil {
 		log.DefaultLogger.Errorf("wasm instance error :%v", err)
 		return nil
