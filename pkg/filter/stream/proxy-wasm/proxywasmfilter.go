@@ -33,6 +33,10 @@ func CreateProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilter
 	initWasmVM(cfg)
 	rootWasmInstance = NewWasmInstance()
 
+	if _, err := rootWasmInstance.proxy_on_vm_start(int32(root_id), 1000); err != nil {
+		log.DefaultLogger.Errorf("start err %v\n", err)
+	}
+
 	if rootWasmInstance == nil {
 		log.DefaultLogger.Errorf("wasm init error")
 	}
@@ -60,10 +64,6 @@ func (f *FilterConfigFactory) CreateFilterChain(context context.Context, callbac
 	callbacks.AddStreamReceiverFilter(filter, api.BeforeRoute)
 	callbacks.AddStreamSenderFilter(filter)
 
-	if _, err := filter.instance.Exports["proxy_on_context_create"](filter.contextId, root_id); err != nil {
-		log.DefaultLogger.Errorf("wasm proxy_on_context_create err: %v", err)
-	}
-	//filter.instance.SetContextData(filter.wasmContext)
 	log.DefaultLogger.Debugf("wasm filter init success")
 }
 
@@ -72,19 +72,26 @@ type streamProxyWasmFilter struct {
 	ctx      context.Context
 	rhandler api.StreamReceiverFilterHandler
 	shandler api.StreamSenderFilterHandler
-
+	config   *StreamProxyWasmConfig
 	*wasmContext
 }
 
-func NewFilter(ctx context.Context, wasm *StreamProxyWasmConfig) *streamProxyWasmFilter {
+func NewFilter(ctx context.Context, config *StreamProxyWasmConfig) *streamProxyWasmFilter {
 	if log.Proxy.GetLogLevel() >= log.DEBUG {
 		log.DefaultLogger.Debugf("create a new proxy wasm filter")
 	}
 	filter := &streamProxyWasmFilter{
 		ctx:         ctx,
+		config:      config,
 		wasmContext: NewWasmInstance(),
 	}
 	filter.wasmContext.filter = filter
+
+	if err := filter.proxy_on_context_create(filter.contextId, int32(root_id)); err != nil {
+		log.DefaultLogger.Errorf("root err %v\n", err)
+		return nil
+	}
+
 	return filter
 }
 

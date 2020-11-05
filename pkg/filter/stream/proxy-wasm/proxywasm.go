@@ -13,7 +13,7 @@ var rootWasmInstance *wasmContext
 
 func initWasmVM(config *StreamProxyWasmConfig) {
 	RootContext = &rootContext{
-		config:        config,
+		config: config,
 	}
 
 	RootContext.wasmCode, _ = wasm.ReadBytes(config.Path)
@@ -34,26 +34,22 @@ func NewWasmInstance() *wasmContext {
 		return nil
 	}
 
-	if _, err := instance.Exports["_start"](); err != nil {
+	id++
+	instanceCtx := &wasmContext{
+		contextId: id,
+		instance:  &instance,
+	}
+
+	// _start must be in the front of SetContextData, don't ask me why
+	if err := instanceCtx._start(); err != nil {
 		log.DefaultLogger.Errorf("wasm start err: %v\n", err)
 		return nil
 	}
 
-	id++
-	instanceCtx := &wasmContext{
-		contextId : id,
-		instance: &instance,
-	}
-
 	instance.SetContextData(instanceCtx)
 
-	if _, err := instance.Exports["proxy_on_context_create"](root_id, 0); err != nil {
+	if err := instanceCtx.proxy_on_context_create(int32(root_id), 0); err != nil {
 		log.DefaultLogger.Errorf("root err %v\n", err)
-		return nil
-	}
-
-	if _, err := instance.Exports["proxy_on_vm_start"](root_id, 1000); err != nil {
-		log.DefaultLogger.Errorf("start err %v\n", err)
 		return nil
 	}
 
