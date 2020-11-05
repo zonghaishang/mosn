@@ -36,6 +36,7 @@ func NewWasmInstance() *wasmContext {
 
 	id++
 	instanceCtx := &wasmContext{
+		rootContext: RootContext,
 		contextId: id,
 		instance:  &instance,
 	}

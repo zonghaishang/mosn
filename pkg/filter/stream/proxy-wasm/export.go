@@ -12,7 +12,6 @@ import "C"
 
 import (
 	"encoding/binary"
-	"fmt"
 	"unsafe"
 
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
@@ -45,27 +44,29 @@ func proxy_get_buffer_bytes(context unsafe.Pointer, bufferType int32, start int3
 }
 
 //export proxy_get_header_map_pairs
-func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, keyData int32, keySize int32) int32 {
-	var instanceContext = wasm.IntoInstanceContext(context)
-	ctx := instanceContext.Data().(*wasmContext)
+func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, returnDataPtr int32, returnDataSize int32) int32 {
+	log.DefaultLogger.Debugf("wasm call host.proxy_get_header_map_pairs")
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
 
-	var header api.HeaderMap
-	switch MapType(mapType) {
-	case MapTypeHttpRequestHeaders:
-		header = ctx.filter.rhandler.GetRequestHeaders()
-	case MapTypeHttpResponseHeaders:
-		header = ctx.filter.shandler.GetResponseHeaders()
+	if MapType(mapType) > MapTypeMax {
+		return WasmResultBadArgument.Int32()
+	}
+
+	header := ctx.GetHeaderMap(MapType(mapType))
+	if header == nil {
+		return WasmResultNotFound.Int32()
 	}
 
 	headerSize := 0
 
-	f := ctx.instance.Exports["malloc"]
-	r, err := f(int32(header.ByteSize() + 200))
+	addr, err := ctx.malloc(int32(header.ByteSize() + 200))
 	if err != nil {
-		fmt.Printf("wasm malloc error: %v", err)
+		log.DefaultLogger.Errorf("wasm malloc error: %v", err)
+		return WasmResultInternalFailure.Int32()
 	}
-	start := r.ToI32()
-	memory := ctx.instance.Memory.Data()
+	start := addr
 	p := start
 
 	p += 4
@@ -94,10 +95,10 @@ func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, keyData i
 
 	binary.LittleEndian.PutUint32(memory[start:], uint32(headerSize))
 
-	binary.LittleEndian.PutUint32(memory[keyData:], uint32(start))
-	binary.LittleEndian.PutUint32(memory[keySize:], uint32(p-start))
+	binary.LittleEndian.PutUint32(memory[returnDataPtr:], uint32(start))
+	binary.LittleEndian.PutUint32(memory[returnDataSize:], uint32(p-start))
 
-	return 0
+	return WasmResultOk.Int32()
 }
 
 //export proxy_replace_header_map_value
@@ -148,31 +149,57 @@ func proxy_add_header_map_value(context unsafe.Pointer, mapType int32, keyData i
 
 //export proxy_log
 func proxy_log(context unsafe.Pointer, logLevel int32, messageData int32, messageSize int32) int32 {
-	var instanceContext = wasm.IntoInstanceContext(context)
-	var memory = instanceContext.Memory().Data()
+	log.DefaultLogger.Debugf("wasm call host.proxy_log")
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	var memory = instanceCtx.Memory().Data()
 
 	msg := string(memory[messageData : messageData+messageSize])
 	log.DefaultLogger.Errorf("wasm log: %s", msg)
-	return 0
+	return WasmResultOk.Int32()
 }
 
 //export proxy_get_property
 func proxy_get_property(context unsafe.Pointer, pathData int32, pathSize int32, returnValueData int32, returnValueSize int32) int32 {
-	id := "my_root_id"
+	//id := "my_root_id"
+	//
+	//var instanceContext = wasm.IntoInstanceContext(context)
+	//
+	//instance := instanceContext.Data().(*wasmContext).instance
+	//f := instance.Exports["malloc"]
+	//r, _ := f(len(id))
+	//p := r.ToI32()
+	//memory := instance.Memory.Data()
+	//copy(memory[p:], id)
+	//
+	//binary.LittleEndian.PutUint32(memory[returnValueData:], uint32(p))
+	//binary.LittleEndian.PutUint32(memory[returnValueSize:], uint32(len(id)))
+	//
+	//return 0
 
-	var instanceContext = wasm.IntoInstanceContext(context)
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
 
-	instance := instanceContext.Data().(*wasmContext).instance
-	f := instance.Exports["malloc"]
-	r, _ := f(len(id))
-	p := r.ToI32()
-	memory := instance.Memory.Data()
-	copy(memory[p:], id)
+	//key := string(memory[pathData : pathData+pathSize])
+
+	// TODO: property not exist
+	//value := ctx.rootContext.GetProperty(key)
+	//if value == "" {
+	//	return 0
+	//}
+	value := "my_root_id"
+
+	addr, err := ctx.malloc(int32(len(value)))
+	if err != nil {
+		log.DefaultLogger.Errorf("wasm malloc error: %v", err)
+		return WasmResultInternalFailure.Int32()
+	}
+	p := addr
+	copy(memory[p:], value)
 
 	binary.LittleEndian.PutUint32(memory[returnValueData:], uint32(p))
-	binary.LittleEndian.PutUint32(memory[returnValueSize:], uint32(len(id)))
-
-	return 0
+	binary.LittleEndian.PutUint32(memory[returnValueSize:], uint32(len(value)))
+	return WasmResultOk.Int32()
 }
 
 

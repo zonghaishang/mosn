@@ -2,13 +2,115 @@ package proxywasm
 
 import (
 	"errors"
+	"mosn.io/api"
 
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
 	"mosn.io/mosn/pkg/log"
 )
 
+type ContextBase interface {
+
+	//
+	// GeneralInterface
+	//
+
+	// Provides the status of the last call into the VM or out of the VM, similar to errno.
+	// return the status code and a descriptive string.
+	GetStatus() (statusCode int32, statusDescribe string)
+
+	// Return the current log level in the host
+	GetLogLevel() uint32
+
+	// Get the value of a property.  Some properties are proxy-independent (e.g. ["plugin_root_id"])
+	// while others can be proxy-specific.
+	GetProperty(key string) string
+
+	// Set the value of a property
+	SetProperty(key string, value string)
+
+	// Returns plugin configuration.
+	GetConfiguration() string
+
+	// Provides the current time in nanoseconds since the Unix epoch.
+	GetCurrentTimeNanoseconds() int
+
+	// Enables a periodic timer with the given period or sets the period of an existing timer. Note:
+	// 		the timer is associated with the Root Context of whatever Context this call was made on.
+	// @param period is the period of the periodic timer in milliseconds.  If the period is 0 the
+	// 		timer is reset/deleted and will not call onTick.
+	// @param timer is a pointer to the timer.  If the target of timer is
+	// 		zero, a new timer will be allocated its token will be set.  If the target is non-zero, then
+	// 		that timer will have the new period (or be reset/deleted if period is zero).
+	SetTimerPeriod(period int64, timer uint32)
+
+	//
+	// SharedDataInterface
+	//
+	// SharedDataInterface is for sharing data between VMs. In general the VMs may be on different
+	// threads. Keys can have any format, but good practice would use reverse DNS and namespacing
+	// prefixes to avoid conflicts.
+
+	// Get proxy-wide key-value data shared between VMs.
+	// @param key is a proxy-wide key mapping to the shared data value.
+	// @param cas is a number which will be incremented when a data value has been changed.
+	// @param data is a location to store the returned stored 'value' and the corresponding 'cas'
+	// 		  compare-and-swap value which can be used with setSharedData for safe concurrent updates.
+	GetSharedData(key string) (value string, cas uint32)
+
+	// Set a key-value data shared between VMs.
+	// @param key is a proxy-wide key mapping to the shared data value.
+	// @param cas is a compare-and-swap value. If it is zero it is ignored, otherwise it must match
+	// 		the cas associated with the value.
+	// @param data is a location to store the returned value.
+	SetSharedData(key string, value string, cas uint32)
+
+	//
+	// SharedQueueInterface
+	//
+
+	// Register a proxy-wide queue, return a token corresponding to the queue.
+	RegisterSharedQueue(queueName string) uint32
+
+	// Get the token for a queue, return the token corresponding to the queue.
+	LookupSharedQueue(queueName string) uint32
+
+	// Dequeue a message from a shared queue
+	DequeueSharedQueue(queueToken uint32, data string)
+
+	// Enqueue a message on a shared queue
+	EnqueueSharedQueue(queueToken uint32, data string)
+
+	//
+	// MetricsInterface
+	//
+
+	// Define a metric (Stat)
+	DefineMetric(metricType MetricType, name string) uint32
+
+	// Increment a metric
+	IncrementMetric(metricId uint32, offset int64)
+
+	// Record a metric
+	RecordMetric(metricId uint32, value uint64)
+
+	// Get the current value of a metric
+	GetMetric(metricId uint32) uint64
+
+	//
+	// Buffer/HeaderMap
+	//
+	GetBuffer(bufferType BufferType) []byte
+	SetBuffer(bufferType BufferType, buf []byte)
+	GetHeaderMap(mapType MapType) api.HeaderMap
+	GetHeaderMapValue(mapType MapType, key string) string
+	SetHeaderMapValue(mapType MapType, key string, value string)
+	AddHeaderMapValue(mapType MapType, key string, value string)
+	DelHeaderMapValue(mapType MapType, key string)
+}
+
 type ProxyWasmExports interface {
 	_start() error
+	malloc(size int32) (int32, error)
 
 	proxy_on_context_create(contextId int32, parentContextId int32) error
 	proxy_on_done(contextId int32) (int32, error)
@@ -64,10 +166,24 @@ type rootContext struct {
 }
 
 type wasmContext struct {
+	rootContext *rootContext
 	contextId int32
 	filter    *streamProxyWasmFilter
 	instance  *wasm.Instance
 }
+
+
+func (wasm *wasmContext) GetHeaderMap(mapType MapType) api.HeaderMap {
+	switch mapType {
+	case MapTypeHttpRequestHeaders:
+		return wasm.filter.rhandler.GetRequestHeaders()
+	case MapTypeHttpResponseHeaders:
+		return wasm.filter.shandler.GetResponseHeaders()
+	default:
+		return nil
+	}
+}
+
 
 func (wasm *wasmContext) _start() error {
 	log.DefaultLogger.Debugf("wasm call exported func: _start")
@@ -77,6 +193,19 @@ func (wasm *wasmContext) _start() error {
 	}
 	_, err := ff()
 	return err
+}
+
+func (wasm *wasmContext) malloc(size int32) (int32, error) {
+	log.DefaultLogger.Debugf("wasm call exported func: malloc")
+	ff := wasm.instance.Exports["malloc"]
+	if ff == nil {
+		return 0, errors.New("func malloc not found")
+	}
+	addr, err := ff(size)
+	if err != nil {
+		return 0, err
+	}
+	return addr.ToI32(), nil
 }
 
 func (wasm *wasmContext) proxy_on_context_create(contextId int32, parentContextId int32) error {
