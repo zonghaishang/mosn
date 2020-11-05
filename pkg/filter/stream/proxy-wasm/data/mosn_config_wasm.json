@@ -46,7 +46,7 @@
                         {
                             "type": "proxy-wasm",
                             "config": {
-                                "path":"./pkg/filter/stream/proxy-wasm/data/myproject.wasm"
+                                "path":"./pkg/filter/stream/proxy-wasm/data/http_headers.wasm"
                             }
                         }
                     ]

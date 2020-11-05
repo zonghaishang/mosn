@@ -8,6 +8,7 @@ package proxywasm
 // extern int proxy_get_buffer_bytes(void *context, int, int, int, int, int);
 // extern int proxy_replace_header_map_value(void *context, int, int, int, int, int);
 // extern int proxy_add_header_map_value(void *context, int, int, int, int, int);
+// extern int proxy_set_effective_context(void *context, int);
 import "C"
 
 import (
@@ -160,21 +161,6 @@ func proxy_log(context unsafe.Pointer, logLevel int32, messageData int32, messag
 
 //export proxy_get_property
 func proxy_get_property(context unsafe.Pointer, pathData int32, pathSize int32, returnValueData int32, returnValueSize int32) int32 {
-	//id := "my_root_id"
-	//
-	//var instanceContext = wasm.IntoInstanceContext(context)
-	//
-	//instance := instanceContext.Data().(*wasmContext).instance
-	//f := instance.Exports["malloc"]
-	//r, _ := f(len(id))
-	//p := r.ToI32()
-	//memory := instance.Memory.Data()
-	//copy(memory[p:], id)
-	//
-	//binary.LittleEndian.PutUint32(memory[returnValueData:], uint32(p))
-	//binary.LittleEndian.PutUint32(memory[returnValueSize:], uint32(len(id)))
-	//
-	//return 0
 
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
@@ -202,6 +188,11 @@ func proxy_get_property(context unsafe.Pointer, pathData int32, pathSize int32, 
 	return WasmResultOk.Int32()
 }
 
+//export proxy_set_effective_context
+func proxy_set_effective_context(context unsafe.Pointer, context_id int32) int32 {
+	return 0
+}
+
 
 func ProxyWasmImports() *wasm.Imports {
 	im := wasm.NewImports()
@@ -211,5 +202,8 @@ func ProxyWasmImports() *wasm.Imports {
 	im, _ = im.AppendFunction("proxy_get_buffer_bytes", proxy_get_buffer_bytes, C.proxy_get_buffer_bytes)
 	im, _ = im.AppendFunction("proxy_replace_header_map_value", proxy_replace_header_map_value, C.proxy_replace_header_map_value)
 	im, _ = im.AppendFunction("proxy_add_header_map_value", proxy_add_header_map_value, C.proxy_add_header_map_value)
+
+	im, _ = im.AppendFunction("proxy_set_effective_context", proxy_set_effective_context, C.proxy_set_effective_context)
+
 	return im
 }
