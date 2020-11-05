@@ -15,16 +15,27 @@ func initWasmVM(config *StreamProxyWasmConfig) {
 	RootContext = &rootContext{
 		config: config,
 	}
+	var err error
 
-	RootContext.wasmCode, _ = wasm.ReadBytes(config.Path)
-	RootContext.wasmModule, _ = wasm.Compile(RootContext.wasmCode)
+	RootContext.wasmCode, err = wasm.ReadBytes(config.Path)
+	if err != nil {
+		log.DefaultLogger.Errorf("wasm fail to read code bytes, err: %v", err)
+	}
+
+	RootContext.wasmModule, err = wasm.Compile(RootContext.wasmCode)
+	if err != nil {
+		log.DefaultLogger.Errorf("wasm fail to compile wasm code, err: %v", err)
+	}
 	RootContext.wasiVersion = wasm.WasiGetVersion(RootContext.wasmModule)
 
 	RootContext.wasmImportObj = wasm.NewDefaultWasiImportObjectForVersion(RootContext.wasiVersion)
 
 	im := ProxyWasmImports()
 
-	RootContext.wasmImportObj.Extend(*im)
+	err = RootContext.wasmImportObj.Extend(*im)
+	if err != nil {
+		log.DefaultLogger.Errorf("wasm fail to extend import obj, err: %v", err)
+	}
 }
 
 func NewWasmInstance() *wasmContext {

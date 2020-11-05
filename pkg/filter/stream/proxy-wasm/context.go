@@ -165,6 +165,14 @@ type rootContext struct {
 	wasmImportObj *wasm.ImportObject
 }
 
+func (ctx *rootContext) GetVmConfiguration() []byte {
+	return nil
+}
+
+func (ctx *rootContext) GetPluginConfiguration() []byte {
+	return nil
+}
+
 type wasmContext struct {
 	rootContext *rootContext
 	contextId int32
@@ -172,6 +180,20 @@ type wasmContext struct {
 	instance  *wasm.Instance
 }
 
+func (wasm *wasmContext) GetBuffer(bufferType BufferType) []byte {
+	switch bufferType {
+	case BufferTypeHttpRequestBody:
+		return wasm.filter.rhandler.GetRequestData().Bytes()
+	case BufferTypeHttpResponseBody:
+		return wasm.filter.shandler.GetResponseData().Bytes()
+	case BufferTypeVmConfiguration:
+		return wasm.rootContext.GetVmConfiguration()
+	case BufferTypePluginConfiguration:
+		return wasm.rootContext.GetPluginConfiguration()
+	default:
+		return nil
+	}
+}
 
 func (wasm *wasmContext) GetHeaderMap(mapType MapType) api.HeaderMap {
 	switch mapType {
@@ -183,6 +205,66 @@ func (wasm *wasmContext) GetHeaderMap(mapType MapType) api.HeaderMap {
 		return nil
 	}
 }
+
+func (wasm *wasmContext) GetHeaderMapValue(mapType MapType, key string) (value string) {
+	var header api.HeaderMap
+	switch mapType {
+	case MapTypeHttpRequestHeaders:
+		header = wasm.filter.rhandler.GetRequestHeaders()
+		value, _ = header.Get(key)
+	case MapTypeHttpResponseHeaders:
+		header = wasm.filter.shandler.GetResponseHeaders()
+		value, _ = header.Get(key)
+	default:
+		value = ""
+	}
+	return value
+}
+
+func (wasm *wasmContext) SetHeaderMapValue(mapType MapType, key string, value string) {
+	var header api.HeaderMap
+	switch mapType {
+	case MapTypeHttpRequestHeaders:
+		header = wasm.filter.rhandler.GetRequestHeaders()
+		header.Set(key, value)
+	case MapTypeHttpResponseHeaders:
+		header = wasm.filter.shandler.GetResponseHeaders()
+		header.Set(key, value)
+	default:
+		return
+	}
+}
+
+func (wasm *wasmContext) AddHeaderMapValue(mapType MapType, key string, value string) {
+	var header api.HeaderMap
+	switch mapType {
+	case MapTypeHttpRequestHeaders:
+		header = wasm.filter.rhandler.GetRequestHeaders()
+		header.Add(key, value)
+	case MapTypeHttpResponseHeaders:
+		header = wasm.filter.shandler.GetResponseHeaders()
+		header.Add(key, value)
+	default:
+		return
+	}
+}
+
+func (wasm *wasmContext) DelHeaderMapValue(mapType MapType, key string) {
+	var header api.HeaderMap
+	switch mapType {
+	case MapTypeHttpRequestHeaders:
+		header = wasm.filter.rhandler.GetRequestHeaders()
+		header.Del(key)
+	case MapTypeHttpResponseHeaders:
+		header = wasm.filter.shandler.GetResponseHeaders()
+		header.Del(key)
+	default:
+		break
+	}
+}
+
+
+
 
 
 func (wasm *wasmContext) _start() error {

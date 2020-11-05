@@ -4,11 +4,14 @@ package proxywasm
 //
 // extern int proxy_log(void *context, int, int, int);
 // extern int proxy_get_property(void *context, int, int, int, int);
-// extern int proxy_get_header_map_pairs(void *context, int, int, int);
-// extern int proxy_get_buffer_bytes(void *context, int, int, int, int, int);
-// extern int proxy_replace_header_map_value(void *context, int, int, int, int, int);
-// extern int proxy_add_header_map_value(void *context, int, int, int, int, int);
 // extern int proxy_set_effective_context(void *context, int);
+//
+// extern int proxy_get_buffer_bytes(void *context, int, int, int, int, int);
+// extern int proxy_get_header_map_pairs(void *context, int, int, int);
+// extern int proxy_get_header_map_value(void *context, int, int, int, int, int);
+// extern int proxy_replace_header_map_value(void *context, int, int, int,int, int);
+// extern int proxy_add_header_map_value(void *context, int, int, int, int, int);
+// extern int proxy_remove_header_map_value(void *context, int, int, int);
 import "C"
 
 import (
@@ -16,33 +19,64 @@ import (
 	"unsafe"
 
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
-	"mosn.io/api"
 	"mosn.io/mosn/pkg/log"
 )
 
-//export proxy_get_buffer_bytes
-func proxy_get_buffer_bytes(context unsafe.Pointer, bufferType int32, start int32, maxSize int32, returnBufferData int32, returnBufferSize int32) int32 {
-	var instanceContext = wasm.IntoInstanceContext(context)
-	ctx := instanceContext.Data().(*wasmContext)
 
-	var body []byte
-	switch BufferType(bufferType) {
-	case BufferTypeHttpRequestBody:
-		body = ctx.filter.rhandler.GetRequestData().Bytes()
-	case BufferTypeHttpResponseBody:
-		body = ctx.filter.shandler.GetResponseData().Bytes()
+func ProxyWasmImports() *wasm.Imports {
+	im := wasm.NewImports()
+	im, _ = im.AppendFunction("proxy_log", proxy_log, C.proxy_log)
+	im, _ = im.AppendFunction("proxy_get_property", proxy_get_property, C.proxy_get_property)
+	im, _ = im.AppendFunction("proxy_set_effective_context", proxy_set_effective_context, C.proxy_set_effective_context)
+
+	im, _ = im.AppendFunction("proxy_get_buffer_bytes", proxy_get_buffer_bytes, C.proxy_get_buffer_bytes)
+	im, _ = im.AppendFunction("proxy_get_header_map_pairs", proxy_get_header_map_pairs, C.proxy_get_header_map_pairs)
+	im, _ = im.AppendFunction("proxy_get_header_map_value", proxy_get_header_map_value, C.proxy_get_header_map_value)
+	im, _ = im.AppendFunction("proxy_replace_header_map_value", proxy_replace_header_map_value, C.proxy_replace_header_map_value)
+	im, _ = im.AppendFunction("proxy_add_header_map_value", proxy_add_header_map_value, C.proxy_add_header_map_value)
+	im, _ = im.AppendFunction("proxy_remove_header_map_value", proxy_remove_header_map_value, C.proxy_remove_header_map_value)
+
+	return im
+}
+
+//export proxy_get_buffer_bytes
+func proxy_get_buffer_bytes(context unsafe.Pointer, bufferType int32, start int32, length int32, returnBufferData int32, returnBufferSize int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if BufferType(bufferType) > BufferTypeMax {
+		return WasmResultBadArgument.Int32()
 	}
 
-	r, _ := ctx.instance.Exports["malloc"](len(body))
-	p := r.ToI32()
-	memory := ctx.instance.Memory.Data()
-	copy(memory[p:], body)
+	body := ctx.GetBuffer(BufferType(bufferType))
+	if body == nil {
+		return WasmResultNotFound.Int32()
+	}
 
-	binary.LittleEndian.PutUint32(memory[returnBufferData:], uint32(p))
-	binary.LittleEndian.PutUint32(memory[returnBufferSize:], uint32(len(body)))
+	// Check for overflow.
+	if start > start+length {
+		return WasmResultBadArgument.Int32()
+	}
 
-	return 0
+	if start+length > int32(len(body)) {
+		length = int32(len(body)) - start
+	}
+
+	if length > 0 {
+		addr, err := ctx.malloc(length)
+		if err != nil {
+			log.DefaultLogger.Errorf("wasm malloc error: %v", err)
+			return WasmResultInternalFailure.Int32()
+		}
+		copy(memory[addr:], body[start:start+length])
+
+		binary.LittleEndian.PutUint32(memory[returnBufferData:], uint32(addr))
+		binary.LittleEndian.PutUint32(memory[returnBufferSize:], uint32(length))
+	}
+	return WasmResultOk.Int32()
 }
+
 
 //export proxy_get_header_map_pairs
 func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, returnDataPtr int32, returnDataSize int32) int32 {
@@ -102,50 +136,105 @@ func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, returnDat
 	return WasmResultOk.Int32()
 }
 
-//export proxy_replace_header_map_value
-func proxy_replace_header_map_value(context unsafe.Pointer, mapType int32, keyData int32, keySize int32, valueData int32, valueSize int32) int32 {
-	var instanceContext = wasm.IntoInstanceContext(context)
-	var memory = instanceContext.Memory().Data()
+//export proxy_get_header_map_value
+func proxy_get_header_map_value(context unsafe.Pointer, mapType int32, keyDataPtr int32, keySize int32, valueDataPtr int32, valueSize int32) int32 {
+	log.DefaultLogger.Debugf("wasm call host.proxy_get_header_map_value")
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
 
-	ctx := instanceContext.Data().(*wasmContext)
-
-	key := string(memory[keyData : keyData+keySize])
-	value := string(memory[valueData : valueData+valueSize])
-
-	var header api.HeaderMap
-	switch MapType(mapType) {
-	case MapTypeHttpRequestHeaders:
-		header = ctx.filter.rhandler.GetRequestHeaders()
-		header.Set(key, value)
-	case MapTypeHttpResponseHeaders:
-		header = ctx.filter.shandler.GetResponseHeaders()
-		header.Set(key, value)
+	if MapType(mapType) > MapTypeMax {
+		return WasmResultBadArgument.Int32()
 	}
 
-	return 0
+	key := string(memory[keyDataPtr : keyDataPtr+keySize])
+	if key == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+
+	value := ctx.GetHeaderMapValue(MapType(mapType), key)
+
+	addr, err := ctx.malloc(int32(len(value)))
+	if err != nil {
+		log.DefaultLogger.Errorf("wasm malloc error: %v", err)
+		return WasmResultInternalFailure.Int32()
+	}
+	copy(memory[addr:], value)
+
+	binary.LittleEndian.PutUint32(memory[valueDataPtr:], uint32(addr))
+	binary.LittleEndian.PutUint32(memory[valueSize:], uint32(len(value)))
+
+	return WasmResultOk.Int32()
+}
+
+//export proxy_replace_header_map_value
+func proxy_replace_header_map_value(context unsafe.Pointer, mapType int32, keyData int32, keySize int32, valueData int32, valueSize int32) int32 {
+	log.DefaultLogger.Debugf("wasm call host.proxy_replace_header_map_value")
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if MapType(mapType) > MapTypeMax {
+		return WasmResultBadArgument.Int32()
+	}
+
+	key := string(memory[keyData : keyData+keySize])
+	if key == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+	// TODO: need to check null for value?
+	value := string(memory[valueData : valueData+valueSize])
+
+	ctx.SetHeaderMapValue(MapType(mapType), key, value)
+
+	return WasmResultOk.Int32()
 }
 
 //export proxy_add_header_map_value
 func proxy_add_header_map_value(context unsafe.Pointer, mapType int32, keyData int32, keySize int32, valueData int32, valueSize int32) int32 {
-	var instanceContext = wasm.IntoInstanceContext(context)
-	var memory = instanceContext.Memory().Data()
+	log.DefaultLogger.Debugf("wasm call host.proxy_add_header_map_value")
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
 
-	ctx := instanceContext.Data().(*wasmContext)
-
-	key := string(memory[keyData : keyData+keySize])
-	value := string(memory[valueData : valueData+valueSize])
-
-	var header api.HeaderMap
-	switch MapType(mapType) {
-	case MapTypeHttpRequestHeaders:
-		header = ctx.filter.rhandler.GetRequestHeaders()
-		header.Add(key, value)
-	case MapTypeHttpResponseHeaders:
-		header = ctx.filter.shandler.GetResponseHeaders()
-		header.Add(key, value)
+	if MapType(mapType) > MapTypeMax {
+		return WasmResultBadArgument.Int32()
 	}
 
-	return 0
+	key := string(memory[keyData : keyData+keySize])
+	if key == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+
+	value := string(memory[valueData : valueData+valueSize])
+	if value == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+
+	ctx.SetHeaderMapValue(MapType(mapType), key, value)
+
+	return WasmResultOk.Int32()
+}
+
+//export proxy_remove_header_map_value
+func proxy_remove_header_map_value(context unsafe.Pointer, mapType int32, keyDataPtr int32, keySize int32) int32 {
+	log.DefaultLogger.Debugf("wasm call host.proxy_remove_header_map_value")
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if MapType(mapType) > MapTypeMax {
+		return WasmResultBadArgument.Int32()
+	}
+
+	key := string(memory[keyDataPtr : keyDataPtr+keySize])
+	if key == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+
+	ctx.DelHeaderMapValue(MapType(mapType), key)
+
+	return WasmResultOk.Int32()
 }
 
 //export proxy_log
@@ -191,19 +280,4 @@ func proxy_get_property(context unsafe.Pointer, pathData int32, pathSize int32, 
 //export proxy_set_effective_context
 func proxy_set_effective_context(context unsafe.Pointer, context_id int32) int32 {
 	return 0
-}
-
-
-func ProxyWasmImports() *wasm.Imports {
-	im := wasm.NewImports()
-	im, _ = im.AppendFunction("proxy_log", proxy_log, C.proxy_log)
-	im, _ = im.AppendFunction("proxy_get_property", proxy_get_property, C.proxy_get_property)
-	im, _ = im.AppendFunction("proxy_get_header_map_pairs", proxy_get_header_map_pairs, C.proxy_get_header_map_pairs)
-	im, _ = im.AppendFunction("proxy_get_buffer_bytes", proxy_get_buffer_bytes, C.proxy_get_buffer_bytes)
-	im, _ = im.AppendFunction("proxy_replace_header_map_value", proxy_replace_header_map_value, C.proxy_replace_header_map_value)
-	im, _ = im.AppendFunction("proxy_add_header_map_value", proxy_add_header_map_value, C.proxy_add_header_map_value)
-
-	im, _ = im.AppendFunction("proxy_set_effective_context", proxy_set_effective_context, C.proxy_set_effective_context)
-
-	return im
 }
