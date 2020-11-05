@@ -2,10 +2,11 @@ package proxywasm
 
 import (
 	"errors"
-	"mosn.io/api"
 
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
+	"mosn.io/api"
 	"mosn.io/mosn/pkg/log"
+	"mosn.io/pkg/buffer"
 )
 
 type ContextBase interface {
@@ -150,7 +151,6 @@ type ProxyWasmExports interface {
 	proxy_on_foreign_function(rootContextId int32, functionId int32, dataSize int32) error
 }
 
-
 type rootContext struct {
 	config *StreamProxyWasmConfig
 
@@ -175,9 +175,9 @@ func (ctx *rootContext) GetPluginConfiguration() []byte {
 
 type wasmContext struct {
 	rootContext *rootContext
-	contextId int32
-	filter    *streamProxyWasmFilter
-	instance  *wasm.Instance
+	contextId   int32
+	filter      *streamProxyWasmFilter
+	instance    *wasm.Instance
 }
 
 func (wasm *wasmContext) GetBuffer(bufferType BufferType) []byte {
@@ -192,6 +192,17 @@ func (wasm *wasmContext) GetBuffer(bufferType BufferType) []byte {
 		return wasm.rootContext.GetPluginConfiguration()
 	default:
 		return nil
+	}
+}
+
+func (wasm *wasmContext) SetBuffer(bufferType BufferType, buf []byte) {
+	switch bufferType {
+	case BufferTypeHttpRequestBody:
+		wasm.filter.rhandler.SetRequestData(buffer.NewIoBufferBytes(buf))
+	case BufferTypeHttpResponseBody:
+		wasm.filter.shandler.SetResponseData(buffer.NewIoBufferBytes(buf))
+	default:
+		return
 	}
 }
 
@@ -263,10 +274,6 @@ func (wasm *wasmContext) DelHeaderMapValue(mapType MapType, key string) {
 	}
 }
 
-
-
-
-
 func (wasm *wasmContext) _start() error {
 	log.DefaultLogger.Debugf("wasm call exported func: _start")
 	ff := wasm.instance.Exports["_start"]
@@ -312,7 +319,6 @@ func (wasm *wasmContext) proxy_on_vm_start(rootContextId int32, configurationSiz
 	}
 	return res.ToI32(), nil
 }
-
 
 func (wasm *wasmContext) proxy_on_done(contextId int32) (int32, error) {
 	log.DefaultLogger.Debugf("wasm call exported func: proxy_on_done")

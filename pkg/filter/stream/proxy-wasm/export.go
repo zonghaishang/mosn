@@ -7,6 +7,8 @@ package proxywasm
 // extern int proxy_set_effective_context(void *context, int);
 //
 // extern int proxy_get_buffer_bytes(void *context, int, int, int, int, int);
+// extern int proxy_set_buffer_bytes(void *context, int, int, int, int, int);
+//
 // extern int proxy_get_header_map_pairs(void *context, int, int, int);
 // extern int proxy_get_header_map_value(void *context, int, int, int, int, int);
 // extern int proxy_replace_header_map_value(void *context, int, int, int,int, int);
@@ -30,6 +32,9 @@ func ProxyWasmImports() *wasm.Imports {
 	im, _ = im.AppendFunction("proxy_set_effective_context", proxy_set_effective_context, C.proxy_set_effective_context)
 
 	im, _ = im.AppendFunction("proxy_get_buffer_bytes", proxy_get_buffer_bytes, C.proxy_get_buffer_bytes)
+	im, _ = im.AppendFunction("proxy_set_buffer_bytes", proxy_set_buffer_bytes, C.proxy_set_buffer_bytes)
+
+
 	im, _ = im.AppendFunction("proxy_get_header_map_pairs", proxy_get_header_map_pairs, C.proxy_get_header_map_pairs)
 	im, _ = im.AppendFunction("proxy_get_header_map_value", proxy_get_header_map_value, C.proxy_get_header_map_value)
 	im, _ = im.AppendFunction("proxy_replace_header_map_value", proxy_replace_header_map_value, C.proxy_replace_header_map_value)
@@ -41,6 +46,8 @@ func ProxyWasmImports() *wasm.Imports {
 
 //export proxy_get_buffer_bytes
 func proxy_get_buffer_bytes(context unsafe.Pointer, bufferType int32, start int32, length int32, returnBufferData int32, returnBufferSize int32) int32 {
+	log.DefaultLogger.Debugf("wasm call host.proxy_get_buffer_bytes")
+
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
 	memory := ctx.instance.Memory.Data()
@@ -74,6 +81,38 @@ func proxy_get_buffer_bytes(context unsafe.Pointer, bufferType int32, start int3
 		binary.LittleEndian.PutUint32(memory[returnBufferData:], uint32(addr))
 		binary.LittleEndian.PutUint32(memory[returnBufferSize:], uint32(length))
 	}
+	return WasmResultOk.Int32()
+}
+
+//export proxy_set_buffer_bytes
+func proxy_set_buffer_bytes(context unsafe.Pointer, bufferType int32, start int32, length int32, dataPtr int32, dataSize int32) int32 {
+	log.DefaultLogger.Debugf("wasm call host.proxy_set_buffer_bytes")
+
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if BufferType(bufferType) > BufferTypeMax ||
+		(BufferType(bufferType) != BufferTypeHttpRequestBody && BufferType(bufferType) != BufferTypeHttpResponseBody) {
+		return WasmResultBadArgument.Int32()
+	}
+
+	buffer := ctx.GetBuffer(BufferType(bufferType))
+
+	// Check for overflow.
+	if start > start+length {
+		return WasmResultBadArgument.Int32()
+	}
+	if start + length > int32(len(buffer)) {
+		length = int32(len(buffer)) - start
+	}
+	if dataSize > length {
+		dataSize = length
+	}
+
+	copy(buffer[start:], memory[dataPtr:dataPtr+dataSize])
+	ctx.SetBuffer(BufferType(bufferType), buffer)
+
 	return WasmResultOk.Int32()
 }
 
