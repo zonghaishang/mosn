@@ -27,6 +27,8 @@ static RegisterContextFactory register_ExampleContext(CONTEXT_FACTORY(ExampleCon
                                                       ROOT_FACTORY(ExampleRootContext),
                                                       "my_root_id");
 
+int globalCounter;
+
 bool ExampleRootContext::onStart(size_t) {
   LOG_TRACE("onStart");
   return true;
@@ -35,6 +37,8 @@ bool ExampleRootContext::onStart(size_t) {
 void ExampleContext::onCreate() { LOG_WARN(std::string("onCreate " + std::to_string(id()))); }
 
 FilterHeadersStatus ExampleContext::onRequestHeaders(uint32_t, bool) {
+  LOG_DEBUG(std::string("globalCounter: ") + std::to_string(globalCounter));
+  globalCounter++;
   LOG_DEBUG(std::string("onRequestHeaders ") + std::to_string(id()));
   auto result = getRequestHeaderPairs();
   auto pairs = result->pairs();
@@ -46,6 +50,7 @@ FilterHeadersStatus ExampleContext::onRequestHeaders(uint32_t, bool) {
 }
 
 FilterHeadersStatus ExampleContext::onResponseHeaders(uint32_t, bool) {
+  LOG_DEBUG(std::string("globalCounter: ") + std::to_string(globalCounter));
   LOG_DEBUG(std::string("onResponseHeaders ") + std::to_string(id()));
   auto result = getResponseHeaderPairs();
   auto pairs = result->pairs();

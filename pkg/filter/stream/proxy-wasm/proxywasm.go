@@ -9,6 +9,7 @@ var root_id = 100
 var id int32
 
 var RootContext *rootContext
+var rootWasmInstance *wasmContext
 
 func initWasmVM(config *StreamProxyWasmConfig) {
 	RootContext = &rootContext{
@@ -26,7 +27,7 @@ func initWasmVM(config *StreamProxyWasmConfig) {
 	RootContext.wasmImportObj.Extend(*im)
 }
 
-func NewWasmInstance() *wasm.Instance {
+func NewWasmInstance() *wasmContext {
 	instance, err := RootContext.wasmModule.InstantiateWithImportObject(RootContext.wasmImportObj)
 	if err != nil {
 		log.DefaultLogger.Errorf("wasm instance error :%v", err)
@@ -41,7 +42,6 @@ func NewWasmInstance() *wasm.Instance {
 	id++
 	instanceCtx := &wasmContext{
 		contextId : id,
-		filter: nil,
 		instance: &instance,
 	}
 
@@ -57,5 +57,5 @@ func NewWasmInstance() *wasm.Instance {
 		return nil
 	}
 
-	return &instance
+	return instanceCtx
 }
