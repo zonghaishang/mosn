@@ -3,8 +3,6 @@ package proxywasm
 import (
 	"context"
 	"encoding/json"
-	"sync"
-
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
 	"mosn.io/api"
 	"mosn.io/mosn/pkg/log"
@@ -18,8 +16,6 @@ func init() {
 var ProxyWasm = "proxy-wasm"
 
 var rootWasmInstance *wasm.Instance
-var once sync.Once
-var id int32
 
 type StreamProxyWasmConfig struct {
 	Path string `json:"path"`
@@ -35,10 +31,10 @@ func (f *FilterConfigFactory) CreateFilterChain(context context.Context, callbac
 	callbacks.AddStreamReceiverFilter(filter, api.BeforeRoute)
 	callbacks.AddStreamSenderFilter(filter)
 
-	if _, err := filter.wasm.Exports["proxy_on_context_create"](filter.id, root_id); err != nil {
+	if _, err := filter.instance.Exports["proxy_on_context_create"](filter.contextId, root_id); err != nil {
 		log.DefaultLogger.Errorf("wasm proxy_on_context_create err: %v", err)
 	}
-	filter.wasm.SetContextData(&wasmContext{filter, filter.wasm})
+	filter.instance.SetContextData(filter.wasmContext)
 	log.DefaultLogger.Debugf("wasm filter init success")
 }
 
@@ -49,7 +45,7 @@ func CreateProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilter
 		return nil, err
 	}
 
-	initWasm(cfg.Path)
+	initWasmVM(cfg)
 	rootWasmInstance = NewWasmInstance()
 
 	if rootWasmInstance == nil {
@@ -79,9 +75,8 @@ type streamProxyWasmFilter struct {
 	rhandler api.StreamReceiverFilterHandler
 	shandler api.StreamSenderFilterHandler
 	path     string
-	wasm     *wasm.Instance
+	*wasmContext
 	once     bool
-	id       int32
 }
 
 func NewFilter(ctx context.Context, wasm *StreamProxyWasmConfig) *streamProxyWasmFilter {
@@ -89,13 +84,17 @@ func NewFilter(ctx context.Context, wasm *StreamProxyWasmConfig) *streamProxyWas
 		log.DefaultLogger.Debugf("create a new proxy wasm filter")
 	}
 	id++
-	return &streamProxyWasmFilter{
+	filter := &streamProxyWasmFilter{
 		ctx:  ctx,
 		path: wasm.Path,
 		once: true,
-		id:   id,
-		wasm: NewWasmInstance(),
+		wasmContext: &wasmContext{
+			contextId: id,
+			instance:  NewWasmInstance(),
+		},
 	}
+	filter.wasmContext.filter = filter
+	return filter
 }
 
 func (f *streamProxyWasmFilter) SetReceiveFilterHandler(handler api.StreamReceiverFilterHandler) {
@@ -104,17 +103,17 @@ func (f *streamProxyWasmFilter) SetReceiveFilterHandler(handler api.StreamReceiv
 
 func (f *streamProxyWasmFilter) OnReceive(ctx context.Context, headers api.HeaderMap, buf buffer.IoBuffer, trailers api.HeaderMap) api.StreamFilterStatus {
 	if log.Proxy.GetLogLevel() >= log.DEBUG {
-		log.DefaultLogger.Debugf("proxy wasm stream do receive headers, id = %d", f.id)
+		log.DefaultLogger.Debugf("proxy wasm stream do receive headers, id = %d", f.contextId)
 	}
 	if buf != nil && buf.Len() > 0 {
-		if _, err := f.wasm.Exports["proxy_on_request_headers"](f.id, 0, 0); err != nil {
+		if _, err := f.instance.Exports["proxy_on_request_headers"](f.contextId, 0, 0); err != nil {
 			log.DefaultLogger.Errorf("wasm proxy_on_request_headers err: %v", err)
 		}
-		if _, err := f.wasm.Exports["proxy_on_request_body"](f.id, buf.Len(), 1); err != nil {
+		if _, err := f.instance.Exports["proxy_on_request_body"](f.contextId, buf.Len(), 1); err != nil {
 			log.DefaultLogger.Errorf("wasm proxy_on_request_body err: %v", err)
 		}
 	} else {
-		if _, err := f.wasm.Exports["proxy_on_request_headers"](f.id, 0, 1); err != nil {
+		if _, err := f.instance.Exports["proxy_on_request_headers"](f.contextId, 0, 1); err != nil {
 			log.DefaultLogger.Errorf("wasm proxy_on_request_headers err: %v", err)
 		}
 	}
@@ -131,7 +130,7 @@ func (f *streamProxyWasmFilter) Append(ctx context.Context, headers api.HeaderMa
 		log.DefaultLogger.Debugf("proxy wasm stream do receive headers")
 	}
 
-	if _, err := f.wasm.Exports["proxy_on_response_headers"](f.id, 1, 0); err != nil {
+	if _, err := f.instance.Exports["proxy_on_response_headers"](f.contextId, 1, 0); err != nil {
 		log.DefaultLogger.Errorf("wasm proxy_on_response_headers err: %v", err)
 	}
 
@@ -141,8 +140,8 @@ func (f *streamProxyWasmFilter) Append(ctx context.Context, headers api.HeaderMa
 func (f *streamProxyWasmFilter) OnDestroy() {
 	if f.once {
 		f.once = false
-		f.wasm.Exports["proxy_on_log"](f.id)
-		f.wasm.Exports["proxy_on_done"](f.id)
-		f.wasm.Exports["proxy_on_delete"](f.id)
+		f.instance.Exports["proxy_on_log"](f.contextId)
+		f.instance.Exports["proxy_on_done"](f.contextId)
+		f.instance.Exports["proxy_on_delete"](f.contextId)
 	}
 }

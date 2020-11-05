@@ -6,31 +6,28 @@ import (
 )
 
 var root_id = 100
+var id int32
 
-type wasmContext struct {
-	filter   *streamProxyWasmFilter
-	instance *wasm.Instance
-}
+var RootContext *rootContext
 
-var wasmCode []byte
-var wasmModule wasm.Module
-var wasiVersion wasm.WasiVersion
-var wasmImportObj *wasm.ImportObject
+func initWasmVM(config *StreamProxyWasmConfig) {
+	RootContext = &rootContext{
+		config:        config,
+	}
 
-func initWasm(path string) {
-	wasmCode, _ = wasm.ReadBytes(path)
-	wasmModule, _ = wasm.Compile(wasmCode)
-	wasiVersion = wasm.WasiGetVersion(wasmModule)
+	RootContext.wasmCode, _ = wasm.ReadBytes(config.Path)
+	RootContext.wasmModule, _ = wasm.Compile(RootContext.wasmCode)
+	RootContext.wasiVersion = wasm.WasiGetVersion(RootContext.wasmModule)
 
-	wasmImportObj = wasm.NewDefaultWasiImportObjectForVersion(wasiVersion)
+	RootContext.wasmImportObj = wasm.NewDefaultWasiImportObjectForVersion(RootContext.wasiVersion)
 
 	im := ProxyWasmImports()
 
-	wasmImportObj.Extend(*im)
+	RootContext.wasmImportObj.Extend(*im)
 }
 
 func NewWasmInstance() *wasm.Instance {
-	instance, err := wasmModule.InstantiateWithImportObject(wasmImportObj)
+	instance, err := RootContext.wasmModule.InstantiateWithImportObject(RootContext.wasmImportObj)
 	if err != nil {
 		log.DefaultLogger.Errorf("wasm instance error :%v", err)
 		return nil
@@ -41,9 +38,14 @@ func NewWasmInstance() *wasm.Instance {
 		return nil
 	}
 
-	instance.SetContextData(&wasmContext{
-		nil, &instance,
-	})
+	id++
+	instanceCtx := &wasmContext{
+		contextId : id,
+		filter: nil,
+		instance: &instance,
+	}
+
+	instance.SetContextData(instanceCtx)
 
 	if _, err := instance.Exports["proxy_on_context_create"](root_id, 0); err != nil {
 		log.DefaultLogger.Errorf("root err %v\n", err)

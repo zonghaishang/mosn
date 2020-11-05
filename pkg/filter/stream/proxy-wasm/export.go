@@ -20,27 +20,6 @@ import (
 	"mosn.io/mosn/pkg/log"
 )
 
-type MapType int32
-
-const (
-	MapTypeHttpRequestHeaders       MapType = 0
-	MapTypeHttpRequestTrailers      MapType = 1
-	MapTypeHttpResponseHeaders      MapType = 2
-	MapTypeHttpResponseTrailers     MapType = 3
-	MapTypeHttpCallResponseHeaders  MapType = 7
-	MapTypeHttpCallResponseTrailers MapType = 8
-)
-
-type BufferType int32
-
-const (
-	BufferTypeHttpRequestBody      BufferType = 0
-	BufferTypeHttpResponseBody     BufferType = 1
-	BufferTypeDownstreamData       BufferType = 2
-	BufferTypeUpstreamData         BufferType = 3
-	BufferTypeHttpCallResponseBody BufferType = 4
-)
-
 //export proxy_get_buffer_bytes
 func proxy_get_buffer_bytes(context unsafe.Pointer, bufferType int32, start int32, maxSize int32, returnBufferData int32, returnBufferSize int32) int32 {
 	var instanceContext = wasm.IntoInstanceContext(context)
