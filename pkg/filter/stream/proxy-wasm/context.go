@@ -2,6 +2,7 @@ package proxywasm
 
 import (
 	"errors"
+	"time"
 
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
 	"mosn.io/api"
@@ -17,14 +18,14 @@ type ContextBase interface {
 
 	// Provides the status of the last call into the VM or out of the VM, similar to errno.
 	// return the status code and a descriptive string.
-	GetStatus() (statusCode int32, statusDescribe string)
+	GetStatus() (statusCode int32, statusDescribe string, result WasmResult)
 
 	// Return the current log level in the host
-	GetLogLevel() uint32
+	GetLogLevel() (uint32, WasmResult)
 
 	// Get the value of a property.  Some properties are proxy-independent (e.g. ["plugin_root_id"])
 	// while others can be proxy-specific.
-	GetProperty(key string) string
+	GetProperty(key string) (string, WasmResult)
 
 	// Set the value of a property
 	SetProperty(key string, value string)
@@ -33,7 +34,7 @@ type ContextBase interface {
 	GetConfiguration() string
 
 	// Provides the current time in nanoseconds since the Unix epoch.
-	GetCurrentTimeNanoseconds() int
+	GetCurrentTimeNanoseconds() (int, WasmResult)
 
 	// Enables a periodic timer with the given period or sets the period of an existing timer. Note:
 	// 		the timer is associated with the Root Context of whatever Context this call was made on.
@@ -42,7 +43,7 @@ type ContextBase interface {
 	// @param timer is a pointer to the timer.  If the target of timer is
 	// 		zero, a new timer will be allocated its token will be set.  If the target is non-zero, then
 	// 		that timer will have the new period (or be reset/deleted if period is zero).
-	SetTimerPeriod(period int64, timer uint32)
+	SetTimerPeriod(period int64, timer uint32) WasmResult
 
 	//
 	// SharedDataInterface
@@ -56,57 +57,57 @@ type ContextBase interface {
 	// @param cas is a number which will be incremented when a data value has been changed.
 	// @param data is a location to store the returned stored 'value' and the corresponding 'cas'
 	// 		  compare-and-swap value which can be used with setSharedData for safe concurrent updates.
-	GetSharedData(key string) (value string, cas uint32)
+	GetSharedData(key string) (value string, cas uint32, result WasmResult)
 
 	// Set a key-value data shared between VMs.
 	// @param key is a proxy-wide key mapping to the shared data value.
 	// @param cas is a compare-and-swap value. If it is zero it is ignored, otherwise it must match
 	// 		the cas associated with the value.
 	// @param data is a location to store the returned value.
-	SetSharedData(key string, value string, cas uint32)
+	SetSharedData(key string, value string, cas uint32) WasmResult
 
 	//
 	// SharedQueueInterface
 	//
 
 	// Register a proxy-wide queue, return a token corresponding to the queue.
-	RegisterSharedQueue(queueName string) uint32
+	RegisterSharedQueue(queueName string) (uint32, WasmResult)
 
 	// Get the token for a queue, return the token corresponding to the queue.
-	LookupSharedQueue(queueName string) uint32
+	LookupSharedQueue(queueName string) (uint32, WasmResult)
 
 	// Dequeue a message from a shared queue
-	DequeueSharedQueue(queueToken uint32, data string)
+	DequeueSharedQueue(queueToken uint32, data string) WasmResult
 
 	// Enqueue a message on a shared queue
-	EnqueueSharedQueue(queueToken uint32, data string)
+	EnqueueSharedQueue(queueToken uint32, data string) WasmResult
 
 	//
 	// MetricsInterface
 	//
 
 	// Define a metric (Stat)
-	DefineMetric(metricType MetricType, name string) uint32
+	DefineMetric(metricType MetricType, name string) (uint32, WasmResult)
 
 	// Increment a metric
-	IncrementMetric(metricId uint32, offset int64)
+	IncrementMetric(metricId uint32, offset int64) WasmResult
 
 	// Record a metric
-	RecordMetric(metricId uint32, value uint64)
+	RecordMetric(metricId uint32, value uint64) WasmResult
 
 	// Get the current value of a metric
-	GetMetric(metricId uint32) uint64
+	GetMetric(metricId uint32) (uint64, WasmResult)
 
 	//
 	// Buffer/HeaderMap
 	//
-	GetBuffer(bufferType BufferType) []byte
-	SetBuffer(bufferType BufferType, buf []byte)
-	GetHeaderMap(mapType MapType) api.HeaderMap
-	GetHeaderMapValue(mapType MapType, key string) string
-	SetHeaderMapValue(mapType MapType, key string, value string)
-	AddHeaderMapValue(mapType MapType, key string, value string)
-	DelHeaderMapValue(mapType MapType, key string)
+	GetBuffer(bufferType BufferType) ([]byte, WasmResult)
+	SetBuffer(bufferType BufferType, buf []byte) WasmResult
+	GetHeaderMap(mapType MapType) (api.HeaderMap, WasmResult)
+	GetHeaderMapValue(mapType MapType, key string) (string, WasmResult)
+	SetHeaderMapValue(mapType MapType, key string, value string) WasmResult
+	AddHeaderMapValue(mapType MapType, key string, value string) WasmResult
+	DelHeaderMapValue(mapType MapType, key string) WasmResult
 }
 
 type ProxyWasmExports interface {
@@ -180,44 +181,107 @@ type wasmContext struct {
 	instance    *wasm.Instance
 }
 
-func (wasm *wasmContext) GetBuffer(bufferType BufferType) []byte {
+func (wasm *wasmContext) SetTimerPeriod(period int64, timer uint32) WasmResult {
+	log.DefaultLogger.Errorf("wasmContext.SetTimerPeriod() unimplemented")
+	return WasmResultUnimplemented
+}
+
+func (wasm *wasmContext) GetCurrentTimeNanoseconds() (int, WasmResult) {
+	return time.Now().Nanosecond(), WasmResultOk
+}
+
+func (wasm *wasmContext) DefineMetric(metricType MetricType, name string) (uint32, WasmResult) {
+	log.DefaultLogger.Errorf("instanceContext.DefineMetric() unimplemented")
+	return 0, WasmResultUnimplemented
+}
+
+func (wasm *wasmContext) IncrementMetric(metricId uint32, offset int64) WasmResult {
+	log.DefaultLogger.Errorf("instanceContext.IncrementMetric() unimplemented")
+	return WasmResultUnimplemented
+}
+
+func (wasm *wasmContext) RecordMetric(metricId uint32, value uint64) WasmResult {
+	log.DefaultLogger.Errorf("instanceContext.RecordMetric() unimplemented")
+	return WasmResultUnimplemented
+}
+
+func (wasm *wasmContext) GetMetric(metricId uint32) (uint64, WasmResult) {
+	log.DefaultLogger.Errorf("instanceContext.GetMetric() unimplemented")
+	return 0, WasmResultUnimplemented
+}
+
+
+func (wasm *wasmContext) RegisterSharedQueue(queueName string) (uint32, WasmResult) {
+	log.DefaultLogger.Errorf("instanceContext.RegisterSharedQueue() unimplemented")
+	return 0, WasmResultUnimplemented
+}
+
+func (wasm *wasmContext) LookupSharedQueue(queueName string) (uint32, WasmResult) {
+	log.DefaultLogger.Errorf("instanceContext.LookupSharedQueue() unimplemented")
+	return 0, WasmResultUnimplemented
+}
+
+func (wasm *wasmContext) DequeueSharedQueue(queueToken uint32, data string) WasmResult {
+	log.DefaultLogger.Errorf("instanceContext.DequeueSharedQueue() unimplemented")
+	return WasmResultUnimplemented
+}
+
+func (wasm *wasmContext) EnqueueSharedQueue(queueToken uint32, data string) WasmResult {
+	log.DefaultLogger.Errorf("instanceContext.EnqueueSharedQueue() unimplemented")
+	return WasmResultUnimplemented
+}
+
+func (wasm *wasmContext) GetSharedData(key string) (value string, cas uint32, result WasmResult) {
+	log.DefaultLogger.Errorf("instanceContext.GetSharedData() unimplemented")
+	return "", 0, WasmResultUnimplemented
+}
+
+func (wasm *wasmContext) SetSharedData(key string, value string, cas uint32) WasmResult{
+	log.DefaultLogger.Errorf("instanceContext.SetSharedData() unimplemented")
+	return WasmResultUnimplemented
+}
+
+
+func (wasm *wasmContext) GetBuffer(bufferType BufferType) ([]byte, WasmResult) {
 	switch bufferType {
 	case BufferTypeHttpRequestBody:
-		return wasm.filter.rhandler.GetRequestData().Bytes()
+		return wasm.filter.rhandler.GetRequestData().Bytes(), WasmResultOk
 	case BufferTypeHttpResponseBody:
-		return wasm.filter.shandler.GetResponseData().Bytes()
+		return wasm.filter.shandler.GetResponseData().Bytes(), WasmResultOk
 	case BufferTypeVmConfiguration:
-		return wasm.rootContext.GetVmConfiguration()
+		return wasm.rootContext.GetVmConfiguration(), WasmResultOk
 	case BufferTypePluginConfiguration:
-		return wasm.rootContext.GetPluginConfiguration()
+		return wasm.rootContext.GetPluginConfiguration(), WasmResultOk
 	default:
-		return nil
+		return nil, WasmResultBadArgument
 	}
 }
 
-func (wasm *wasmContext) SetBuffer(bufferType BufferType, buf []byte) {
+func (wasm *wasmContext) SetBuffer(bufferType BufferType, buf []byte) WasmResult {
 	switch bufferType {
 	case BufferTypeHttpRequestBody:
 		wasm.filter.rhandler.SetRequestData(buffer.NewIoBufferBytes(buf))
+		return WasmResultOk
 	case BufferTypeHttpResponseBody:
 		wasm.filter.shandler.SetResponseData(buffer.NewIoBufferBytes(buf))
+		return WasmResultOk
 	default:
-		return
+		return WasmResultBadArgument
 	}
 }
 
-func (wasm *wasmContext) GetHeaderMap(mapType MapType) api.HeaderMap {
+func (wasm *wasmContext) GetHeaderMap(mapType MapType) (api.HeaderMap, WasmResult) {
 	switch mapType {
 	case MapTypeHttpRequestHeaders:
-		return wasm.filter.rhandler.GetRequestHeaders()
+		return wasm.filter.rhandler.GetRequestHeaders(), WasmResultOk
 	case MapTypeHttpResponseHeaders:
-		return wasm.filter.shandler.GetResponseHeaders()
+		return wasm.filter.shandler.GetResponseHeaders(), WasmResultOk
 	default:
-		return nil
+		return nil, WasmResultBadArgument
 	}
 }
 
-func (wasm *wasmContext) GetHeaderMapValue(mapType MapType, key string) (value string) {
+func (wasm *wasmContext) GetHeaderMapValue(mapType MapType, key string) (value string, result WasmResult) {
 	var header api.HeaderMap
 	switch mapType {
 	case MapTypeHttpRequestHeaders:
@@ -228,49 +292,56 @@ func (wasm *wasmContext) GetHeaderMapValue(mapType MapType, key string) (value s
 		value, _ = header.Get(key)
 	default:
 		value = ""
+		return value, WasmResultBadArgument
 	}
-	return value
+	return value, WasmResultOk
 }
 
-func (wasm *wasmContext) SetHeaderMapValue(mapType MapType, key string, value string) {
+func (wasm *wasmContext) SetHeaderMapValue(mapType MapType, key string, value string) WasmResult {
 	var header api.HeaderMap
 	switch mapType {
 	case MapTypeHttpRequestHeaders:
 		header = wasm.filter.rhandler.GetRequestHeaders()
 		header.Set(key, value)
+		return WasmResultOk
 	case MapTypeHttpResponseHeaders:
 		header = wasm.filter.shandler.GetResponseHeaders()
 		header.Set(key, value)
+		return WasmResultOk
 	default:
-		return
+		return WasmResultBadArgument
 	}
 }
 
-func (wasm *wasmContext) AddHeaderMapValue(mapType MapType, key string, value string) {
+func (wasm *wasmContext) AddHeaderMapValue(mapType MapType, key string, value string) WasmResult {
 	var header api.HeaderMap
 	switch mapType {
 	case MapTypeHttpRequestHeaders:
 		header = wasm.filter.rhandler.GetRequestHeaders()
 		header.Add(key, value)
+		return WasmResultOk
 	case MapTypeHttpResponseHeaders:
 		header = wasm.filter.shandler.GetResponseHeaders()
 		header.Add(key, value)
+		return WasmResultOk
 	default:
-		return
+		return WasmResultBadArgument
 	}
 }
 
-func (wasm *wasmContext) DelHeaderMapValue(mapType MapType, key string) {
+func (wasm *wasmContext) DelHeaderMapValue(mapType MapType, key string) WasmResult {
 	var header api.HeaderMap
 	switch mapType {
 	case MapTypeHttpRequestHeaders:
 		header = wasm.filter.rhandler.GetRequestHeaders()
 		header.Del(key)
+		return WasmResultOk
 	case MapTypeHttpResponseHeaders:
 		header = wasm.filter.shandler.GetResponseHeaders()
 		header.Del(key)
+		return WasmResultOk
 	default:
-		break
+		return WasmResultBadArgument
 	}
 }
 

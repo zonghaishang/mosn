@@ -14,6 +14,30 @@ package proxywasm
 // extern int proxy_replace_header_map_value(void *context, int, int, int,int, int);
 // extern int proxy_add_header_map_value(void *context, int, int, int, int, int);
 // extern int proxy_remove_header_map_value(void *context, int, int, int);
+//
+// extern int proxy_set_tick_period_milliseconds(void *context, int);
+// extern int proxy_get_current_time_nanoseconds(void *context, int);
+//
+// extern int proxy_grpc_call(void *context, int, int, int, int, int, int, int, int, int, int, int, int);
+// extern int proxy_grpc_stream(void *context, int, int, int, int, int, int, int, int, int);
+// extern int proxy_grpc_cancel(void *context, int);
+// extern int proxy_grpc_close(void *context, int);
+// extern int proxy_grpc_send(void *context, int, int, int, int);
+//
+// extern int proxy_http_call(void *context, int, int, int, int, int, int, int, int, int, int);
+//
+// extern int proxy_define_metric(void *context, int, int, int, int);
+// extern int proxy_increment_metric(void *context, int, int);
+// extern int proxy_record_metric(void *context, int, int);
+// extern int proxy_get_metric(void *context, int, int);
+//
+// extern int proxy_register_shared_queue(void *context, int, int, int);
+// extern int proxy_resolve_shared_queue(void *context, int, int, int, int, int);
+// extern int proxy_dequeue_shared_queue(void *context, int, int, int);
+// extern int proxy_enqueue_shared_queue(void *context, int, int, int);
+//
+// extern int proxy_get_shared_data(void *context, int, int, int, int, int);
+// extern int proxy_set_shared_data(void *context, int, int, int, int, int);
 import "C"
 
 import (
@@ -34,12 +58,35 @@ func ProxyWasmImports() *wasm.Imports {
 	im, _ = im.AppendFunction("proxy_get_buffer_bytes", proxy_get_buffer_bytes, C.proxy_get_buffer_bytes)
 	im, _ = im.AppendFunction("proxy_set_buffer_bytes", proxy_set_buffer_bytes, C.proxy_set_buffer_bytes)
 
-
 	im, _ = im.AppendFunction("proxy_get_header_map_pairs", proxy_get_header_map_pairs, C.proxy_get_header_map_pairs)
 	im, _ = im.AppendFunction("proxy_get_header_map_value", proxy_get_header_map_value, C.proxy_get_header_map_value)
 	im, _ = im.AppendFunction("proxy_replace_header_map_value", proxy_replace_header_map_value, C.proxy_replace_header_map_value)
 	im, _ = im.AppendFunction("proxy_add_header_map_value", proxy_add_header_map_value, C.proxy_add_header_map_value)
 	im, _ = im.AppendFunction("proxy_remove_header_map_value", proxy_remove_header_map_value, C.proxy_remove_header_map_value)
+
+	im, _ = im.AppendFunction("proxy_set_tick_period_milliseconds", proxy_set_tick_period_milliseconds, C.proxy_set_tick_period_milliseconds)
+	im, _ = im.AppendFunction("proxy_get_current_time_nanoseconds", proxy_get_current_time_nanoseconds, C.proxy_get_current_time_nanoseconds)
+
+	im, _ = im.AppendFunction("proxy_grpc_call", proxy_grpc_call, C.proxy_grpc_call)
+	im, _ = im.AppendFunction("proxy_grpc_stream", proxy_grpc_stream, C.proxy_grpc_stream)
+	im, _ = im.AppendFunction("proxy_grpc_cancel", proxy_grpc_cancel, C.proxy_grpc_cancel)
+	im, _ = im.AppendFunction("proxy_grpc_close", proxy_grpc_close, C.proxy_grpc_close)
+	im, _ = im.AppendFunction("proxy_grpc_send", proxy_grpc_send, C.proxy_grpc_send)
+
+	im, _ = im.AppendFunction("proxy_http_call", proxy_http_call, C.proxy_http_call)
+
+	im, _ = im.AppendFunction("proxy_define_metric", proxy_define_metric, C.proxy_define_metric)
+	im, _ = im.AppendFunction("proxy_increment_metric", proxy_increment_metric, C.proxy_increment_metric)
+	im, _ = im.AppendFunction("proxy_record_metric", proxy_record_metric, C.proxy_record_metric)
+	im, _ = im.AppendFunction("proxy_get_metric", proxy_get_metric, C.proxy_get_metric)
+
+	im, _ = im.AppendFunction("proxy_register_shared_queue", proxy_register_shared_queue, C.proxy_register_shared_queue)
+	im, _ = im.AppendFunction("proxy_resolve_shared_queue", proxy_resolve_shared_queue, C.proxy_resolve_shared_queue)
+	im, _ = im.AppendFunction("proxy_dequeue_shared_queue", proxy_dequeue_shared_queue, C.proxy_dequeue_shared_queue)
+	im, _ = im.AppendFunction("proxy_enqueue_shared_queue", proxy_enqueue_shared_queue, C.proxy_enqueue_shared_queue)
+
+	im, _ = im.AppendFunction("proxy_get_shared_data", proxy_get_shared_data, C.proxy_get_shared_data)
+	im, _ = im.AppendFunction("proxy_set_shared_data", proxy_set_shared_data, C.proxy_set_shared_data)
 
 	return im
 }
@@ -56,7 +103,10 @@ func proxy_get_buffer_bytes(context unsafe.Pointer, bufferType int32, start int3
 		return WasmResultBadArgument.Int32()
 	}
 
-	body := ctx.GetBuffer(BufferType(bufferType))
+	body, result := ctx.GetBuffer(BufferType(bufferType))
+	if result != WasmResultOk {
+		return result.Int32()
+	}
 	if body == nil {
 		return WasmResultNotFound.Int32()
 	}
@@ -97,7 +147,10 @@ func proxy_set_buffer_bytes(context unsafe.Pointer, bufferType int32, start int3
 		return WasmResultBadArgument.Int32()
 	}
 
-	buffer := ctx.GetBuffer(BufferType(bufferType))
+	buffer, result := ctx.GetBuffer(BufferType(bufferType))
+	if result != WasmResultOk {
+		return result.Int32()
+	}
 
 	// Check for overflow.
 	if start > start+length {
@@ -111,9 +164,10 @@ func proxy_set_buffer_bytes(context unsafe.Pointer, bufferType int32, start int3
 	}
 
 	copy(buffer[start:], memory[dataPtr:dataPtr+dataSize])
-	ctx.SetBuffer(BufferType(bufferType), buffer)
 
-	return WasmResultOk.Int32()
+	result = ctx.SetBuffer(BufferType(bufferType), buffer)
+
+	return result.Int32()
 }
 
 
@@ -128,7 +182,10 @@ func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, returnDat
 		return WasmResultBadArgument.Int32()
 	}
 
-	header := ctx.GetHeaderMap(MapType(mapType))
+	header, result := ctx.GetHeaderMap(MapType(mapType))
+	if result != WasmResultOk {
+		return result.Int32()
+	}
 	if header == nil {
 		return WasmResultNotFound.Int32()
 	}
@@ -191,7 +248,10 @@ func proxy_get_header_map_value(context unsafe.Pointer, mapType int32, keyDataPt
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
 
-	value := ctx.GetHeaderMapValue(MapType(mapType), key)
+	value, result := ctx.GetHeaderMapValue(MapType(mapType), key)
+	if result != WasmResultOk {
+		return result.Int32()
+	}
 
 	addr, err := ctx.malloc(int32(len(value)))
 	if err != nil {
@@ -224,9 +284,9 @@ func proxy_replace_header_map_value(context unsafe.Pointer, mapType int32, keyDa
 	// TODO: need to check null for value?
 	value := string(memory[valueData : valueData+valueSize])
 
-	ctx.SetHeaderMapValue(MapType(mapType), key, value)
+	result := ctx.SetHeaderMapValue(MapType(mapType), key, value)
 
-	return WasmResultOk.Int32()
+	return result.Int32()
 }
 
 //export proxy_add_header_map_value
@@ -250,9 +310,9 @@ func proxy_add_header_map_value(context unsafe.Pointer, mapType int32, keyData i
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
 
-	ctx.SetHeaderMapValue(MapType(mapType), key, value)
+	result := ctx.SetHeaderMapValue(MapType(mapType), key, value)
 
-	return WasmResultOk.Int32()
+	return result.Int32()
 }
 
 //export proxy_remove_header_map_value
@@ -271,9 +331,9 @@ func proxy_remove_header_map_value(context unsafe.Pointer, mapType int32, keyDat
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
 
-	ctx.DelHeaderMapValue(MapType(mapType), key)
+	result := ctx.DelHeaderMapValue(MapType(mapType), key)
 
-	return WasmResultOk.Int32()
+	return result.Int32()
 }
 
 //export proxy_log
@@ -308,10 +368,9 @@ func proxy_get_property(context unsafe.Pointer, pathData int32, pathSize int32, 
 		log.DefaultLogger.Errorf("wasm malloc error: %v", err)
 		return WasmResultInternalFailure.Int32()
 	}
-	p := addr
-	copy(memory[p:], value)
+	copy(memory[addr:], value)
 
-	binary.LittleEndian.PutUint32(memory[returnValueData:], uint32(p))
+	binary.LittleEndian.PutUint32(memory[returnValueData:], uint32(addr))
 	binary.LittleEndian.PutUint32(memory[returnValueSize:], uint32(len(value)))
 	return WasmResultOk.Int32()
 }
@@ -319,4 +378,277 @@ func proxy_get_property(context unsafe.Pointer, pathData int32, pathSize int32, 
 //export proxy_set_effective_context
 func proxy_set_effective_context(context unsafe.Pointer, context_id int32) int32 {
 	return 0
+}
+
+// Set timer period. Once set, the host environment will call proxy_on_tick every tick_period_milliseconds.
+//export proxy_set_tick_period_milliseconds
+func proxy_set_tick_period_milliseconds(context unsafe.Pointer, tickPeriodMilliseconds int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	return ctx.SetTimerPeriod(int64(tickPeriodMilliseconds), 0).Int32()
+}
+
+//export proxy_get_current_time_nanoseconds
+func proxy_get_current_time_nanoseconds(context unsafe.Pointer, resultUint64Ptr int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	nanoSecond, result := ctx.GetCurrentTimeNanoseconds()
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+
+	binary.LittleEndian.PutUint64(memory[resultUint64Ptr:], uint64(nanoSecond))
+
+	return WasmResultOk.Int32()
+}
+
+//export proxy_grpc_call
+func proxy_grpc_call(context unsafe.Pointer,
+	servicePtr int32, serviceSize int32, serviceNamePtr int32, serviceNameSize int32,
+	methodNamePtr int32, methodNameSize int32,
+	initialMetadataPtr int32, initialMetadataSize int32,
+	requestPtr int32, requestSize int32,
+	timeoutMilliseconds int32, tokenPtr int32) int32 {
+	return WasmResultUnimplemented.Int32()
+}
+
+//export proxy_grpc_stream
+func proxy_grpc_stream(context unsafe.Pointer,
+	servicePtr int32, serviceSize int32, serviceNamePtr int32, serviceNameSize int32,
+	methodNamePtr int32, methodNameSize int32,
+	initialMetadataPtr int32, initialMetadataSize int32,
+	tokenPtr int32) int32 {
+	return WasmResultUnimplemented.Int32()
+}
+
+//export proxy_grpc_cancel
+func proxy_grpc_cancel(context unsafe.Pointer, token int32) int32 {
+	return WasmResultUnimplemented.Int32()
+}
+
+//export proxy_grpc_close
+func proxy_grpc_close(context unsafe.Pointer, token int32) int32 {
+	return WasmResultUnimplemented.Int32()
+}
+
+//export proxy_grpc_send
+func proxy_grpc_send(context unsafe.Pointer, token int32, messagePtr int32, messageSize int32, endStream int32) int32 {
+	return WasmResultUnimplemented.Int32()
+}
+
+//export proxy_http_call
+func proxy_http_call(context unsafe.Pointer,
+	uriPtr int32, uriSize int32,
+	headerPairsPtr int32, headerPairsSize int32,
+	bodyPtr int32, bodySize int32,
+	trailerPairsPtr int32, trailerPairsSize int32,
+	timeoutMilliseconds int32, tokenPtr int32) int32 {
+	return WasmResultUnimplemented.Int32()
+}
+
+//export proxy_define_metric
+func proxy_define_metric(context unsafe.Pointer, metricType int32, namePtr int32, nameSize int32, resultPtr int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if MetricType(metricType) > MetricTypeMax {
+		return WasmResultBadArgument.Int32()
+	}
+	if namePtr > namePtr+nameSize {
+		return WasmResultBadArgument.Int32()
+	}
+
+	name := string(memory[namePtr : namePtr+nameSize])
+	if name == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+
+	metricId, result := ctx.DefineMetric(MetricType(metricType), name)
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+
+	binary.LittleEndian.PutUint32(memory[resultPtr:], metricId)
+
+	return WasmResultOk.Int32()
+}
+
+//export proxy_increment_metric
+func proxy_increment_metric(context unsafe.Pointer, metricId int32, offset int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+
+	result := ctx.IncrementMetric(uint32(metricId), int64(offset))
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+
+	return WasmResultOk.Int32()
+}
+
+//export proxy_record_metric
+func proxy_record_metric(context unsafe.Pointer, metricId int32, value int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+
+	result := ctx.RecordMetric(uint32(metricId), uint64(value))
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+
+	return WasmResultOk.Int32()
+}
+
+//export proxy_get_metric
+func proxy_get_metric(context unsafe.Pointer, metricId int32, resultUint64Ptr int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	value, result := ctx.GetMetric(uint32(metricId))
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+
+	binary.LittleEndian.PutUint64(memory[resultUint64Ptr:], uint64(value))
+
+	return WasmResultOk.Int32()
+}
+
+//export proxy_register_shared_queue
+func proxy_register_shared_queue(context unsafe.Pointer, queueNamePtr int32, queueNameSize int32, tokenPtr int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if queueNamePtr > queueNamePtr+queueNameSize {
+		return WasmResultBadArgument.Int32()
+	}
+
+	queueName := string(memory[queueNamePtr : queueNamePtr+queueNameSize])
+	if queueName == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+
+	queueToken, result := ctx.RegisterSharedQueue(queueName)
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+
+	binary.LittleEndian.PutUint32(memory[tokenPtr:], uint32(queueToken))
+
+	return WasmResultOk.Int32()
+}
+
+// TODO: currently we ignore vmId
+//export proxy_resolve_shared_queue
+func proxy_resolve_shared_queue(context unsafe.Pointer, vmIdPtr int32, vmIdSize int32, queueNamePtr int32, queueNameSize int32, tokenPtr int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if queueNamePtr > queueNamePtr+queueNameSize {
+		return WasmResultBadArgument.Int32()
+	}
+
+	queueName := string(memory[queueNamePtr : queueNamePtr+queueNameSize])
+	if queueName == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+
+	queueToken, result := ctx.LookupSharedQueue(queueName)
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+
+	binary.LittleEndian.PutUint32(memory[tokenPtr:], uint32(queueToken))
+
+	return WasmResultOk.Int32()
+}
+
+//export proxy_dequeue_shared_queue
+func proxy_dequeue_shared_queue(context unsafe.Pointer, token int32, dataPtr int32, dataSize int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if dataPtr > dataPtr+dataSize {
+		return WasmResultBadArgument.Int32()
+	}
+	data := string(memory[dataPtr : dataPtr+dataSize])
+	if data == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+
+	result := ctx.DequeueSharedQueue(uint32(token), data)
+
+	return result.Int32()
+}
+
+//export proxy_enqueue_shared_queue
+func proxy_enqueue_shared_queue(context unsafe.Pointer, token int32, dataPtr int32, dataSize int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if dataPtr > dataPtr+dataSize {
+		return WasmResultBadArgument.Int32()
+	}
+	data := string(memory[dataPtr : dataPtr+dataSize])
+	if data == "" {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+
+	result := ctx.DequeueSharedQueue(uint32(token), data)
+
+	return result.Int32()
+}
+
+// Get proxy-wide key-value data shared between VMs.
+// TODO: currently we ignore the 'cas' field
+//export proxy_get_shared_data
+func proxy_get_shared_data(context unsafe.Pointer, keyPtr int32, keySize int32, valuePtr int32, valueSizePtr int32, casPtr int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	key := string(memory[keyPtr : keyPtr+keySize])
+
+	value, cas, result := ctx.GetSharedData(key)
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+
+	addr, err := ctx.malloc(int32(len(value)))
+	if err != nil {
+		log.DefaultLogger.Errorf("wasm malloc error: %v", err)
+		return WasmResultInternalFailure.Int32()
+	}
+
+	copy(memory[addr:], value)
+	binary.LittleEndian.PutUint32(memory[valuePtr:], uint32(addr))
+	binary.LittleEndian.PutUint32(memory[valueSizePtr:], uint32(len(value)))
+
+	binary.LittleEndian.PutUint32(memory[casPtr:], uint32(cas))
+
+	return WasmResultOk.Int32()
+}
+
+// Set a key-value data shared between VMs.
+// TODO: currently we ignore the 'cas' field
+//export proxy_set_shared_data
+func proxy_set_shared_data(context unsafe.Pointer, keyPtr int32, keySize int32, valuePtr int32, valueSize int32, cas int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	key := string(memory[keyPtr : keyPtr+keySize])
+	value := string(memory[valuePtr : valuePtr+valueSize])
+
+	result := ctx.SetSharedData(key, value, uint32(cas))
+
+	return result.Int32()
 }
