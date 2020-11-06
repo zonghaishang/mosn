@@ -10,6 +10,8 @@ package proxywasm
 // extern int proxy_set_buffer_bytes(void *context, int, int, int, int, int);
 //
 // extern int proxy_get_header_map_pairs(void *context, int, int, int);
+// extern int proxy_set_header_map_pairs(void *context, int, int, int);
+//
 // extern int proxy_get_header_map_value(void *context, int, int, int, int, int);
 // extern int proxy_replace_header_map_value(void *context, int, int, int,int, int);
 // extern int proxy_add_header_map_value(void *context, int, int, int, int, int);
@@ -59,6 +61,8 @@ func ProxyWasmImports() *wasm.Imports {
 	im, _ = im.AppendFunction("proxy_set_buffer_bytes", proxy_set_buffer_bytes, C.proxy_set_buffer_bytes)
 
 	im, _ = im.AppendFunction("proxy_get_header_map_pairs", proxy_get_header_map_pairs, C.proxy_get_header_map_pairs)
+	im, _ = im.AppendFunction("proxy_set_header_map_pairs", proxy_set_header_map_pairs, C.proxy_set_header_map_pairs)
+
 	im, _ = im.AppendFunction("proxy_get_header_map_value", proxy_get_header_map_value, C.proxy_get_header_map_value)
 	im, _ = im.AppendFunction("proxy_replace_header_map_value", proxy_replace_header_map_value, C.proxy_replace_header_map_value)
 	im, _ = im.AppendFunction("proxy_add_header_map_value", proxy_add_header_map_value, C.proxy_add_header_map_value)
@@ -228,6 +232,66 @@ func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, returnDat
 
 	binary.LittleEndian.PutUint32(memory[returnDataPtr:], uint32(start))
 	binary.LittleEndian.PutUint32(memory[returnDataSize:], uint32(p-start))
+
+	return WasmResultOk.Int32()
+}
+
+
+// unmarshal map from rawData
+func unmarshalMap(rawData []byte) map[string]string {
+	if len(rawData) < 4 {
+		return nil
+	}
+	res := make(map[string]string)
+	headerSize := binary.LittleEndian.Uint32(rawData[0:4])
+	p := 4 + (4+4)*headerSize // headerSize + (key1_size + value1_size) * headerSize
+	if int(p) >= len(rawData) {
+		return nil
+	}
+	for i := 0; i < int(headerSize); i++ {
+		lenIndex := 4 + (4+4)*i
+		keySize := binary.LittleEndian.Uint32(rawData[lenIndex : lenIndex+4])
+		valueSize := binary.LittleEndian.Uint32(rawData[lenIndex+4 : lenIndex+8])
+		key := string(rawData[p : p+keySize])
+		p += keySize
+		p++ // 0
+		value := string(rawData[p : p+valueSize])
+		p += valueSize
+		p++ // 0
+		res[key] = value
+	}
+	return res
+}
+
+//export proxy_set_header_map_pairs
+func proxy_set_header_map_pairs(context unsafe.Pointer, mapType int32, ptr int32, size int32) int32 {
+	log.DefaultLogger.Debugf("wasm call host.proxy_set_header_map_pairs")
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if MapType(mapType) > MapTypeMax {
+		return WasmResultBadArgument.Int32()
+	}
+	if ptr > ptr+size {
+		return WasmResultBadArgument.Int32()
+	}
+
+	data := memory[ptr : ptr+size]
+	log.DefaultLogger.Debugf("proxy_set_header_map_pairs: [%v]", string(data))
+
+	m := unmarshalMap(data)
+	if m == nil {
+		return WasmResultInvalidMemoryAccess.Int32()
+	}
+	headerMap, result := ctx.GetHeaderMap(MapType(mapType))
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+
+	for key, value := range m {
+		headerMap.Set(key, value)
+	}
 
 	return WasmResultOk.Int32()
 }
