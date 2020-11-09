@@ -3,6 +3,7 @@ package proxywasm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
@@ -105,9 +106,17 @@ func (f *streamProxyWasmFilter) OnReceive(ctx context.Context, headers api.Heade
 		log.DefaultLogger.Debugf("proxy wasm stream do receive headers, id = %d", f.id)
 	}
 	if buf != nil && buf.Len() > 0 {
+		//
+
+		headers.Range(func(key, value string) bool {
+			fmt.Printf("key:%s -> value:%s", key, value)
+			return true
+		})
+
 		if _, err := wasmInstance.Exports["proxy_on_request_headers"](f.id, 0, 0); err != nil {
 			log.DefaultLogger.Errorf("wasm proxy_on_request_headers err: %v", err)
 		}
+
 		if _, err := wasmInstance.Exports["proxy_on_request_body"](f.id, buf.Len(), 1); err != nil {
 			log.DefaultLogger.Errorf("wasm proxy_on_request_body err: %v", err)
 		}
@@ -139,8 +148,15 @@ func (f *streamProxyWasmFilter) Append(ctx context.Context, headers api.HeaderMa
 func (f *streamProxyWasmFilter) OnDestroy() {
 	if f.once {
 		f.once = false
-		wasmInstance.Exports["proxy_on_log"](f.id)
-		wasmInstance.Exports["proxy_on_done"](f.id)
-		wasmInstance.Exports["proxy_on_delete"](f.id)
+		if log, ok := wasmInstance.Exports["proxy_on_log"]; ok {
+			log(f.id)
+		}
+		if done, ok := wasmInstance.Exports["proxy_on_done"]; ok {
+			done(f.id)
+		}
+
+		if delete, ok := wasmInstance.Exports["proxy_on_delete"]; ok {
+			delete(f.id)
+		}
 	}
 }

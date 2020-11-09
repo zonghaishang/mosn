@@ -46,7 +46,7 @@
                         {
                             "type": "proxy-wasm",
                             "config": {
-                                "path":"/Users/yiji/go/src/mosn.io/mosn/pkg/filter/stream/proxy-wasm/data/envoy_filter_http_wasm_example.wasm"
+                                "path":"/Users/yiji/go/src/mosn.io/mosn/pkg/filter/stream/proxy-wasm/data-go/mosn_filter_http_wasm_example.wasm"
                             }
                         }
                     ]

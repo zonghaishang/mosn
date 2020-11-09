@@ -8,6 +8,7 @@ package proxywasm
 // extern int proxy_get_buffer_bytes(void *context, int, int, int, int, int);
 // extern int proxy_replace_header_map_value(void *context, int, int, int, int, int);
 // extern int proxy_add_header_map_value(void *context, int, int, int, int, int);
+// extern int proxy_set_effective_context(void *context, int);
 import "C"
 
 import (
@@ -196,6 +197,11 @@ func proxy_get_property(context unsafe.Pointer, pathData int32, pathSize int32, 
 	return 0
 }
 
+//export proxy_set_effective_context
+func proxy_set_effective_context(context unsafe.Pointer, ctxId int32) int32 {
+	return 0
+}
+
 var root_id = 100
 
 type wasmContext struct {
@@ -217,6 +223,8 @@ func initWasm(path string) *wasm.Instance {
 	im, _ = im.AppendFunction("proxy_get_buffer_bytes", proxy_get_buffer_bytes, C.proxy_get_buffer_bytes)
 	im, _ = im.AppendFunction("proxy_replace_header_map_value", proxy_replace_header_map_value, C.proxy_replace_header_map_value)
 	im, _ = im.AppendFunction("proxy_add_header_map_value", proxy_add_header_map_value, C.proxy_add_header_map_value)
+
+	im, _ = im.AppendFunction("proxy_set_effective_context", proxy_set_effective_context, C.proxy_set_effective_context)
 
 	err = importObject.Extend(*im)
 
