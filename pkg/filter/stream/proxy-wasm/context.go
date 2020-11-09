@@ -28,7 +28,7 @@ type ContextBase interface {
 	GetProperty(key string) (string, WasmResult)
 
 	// Set the value of a property
-	SetProperty(key string, value string)
+	SetProperty(key string, value string) WasmResult
 
 	// Returns plugin configuration.
 	GetConfiguration() string
@@ -164,6 +164,8 @@ type rootContext struct {
 	wasmModule    wasm.Module
 	wasiVersion   wasm.WasiVersion
 	wasmImportObj *wasm.ImportObject
+
+	propertyMap map[string]string
 }
 
 func (ctx *rootContext) GetVmConfiguration() []byte {
@@ -172,6 +174,25 @@ func (ctx *rootContext) GetVmConfiguration() []byte {
 
 func (ctx *rootContext) GetPluginConfiguration() []byte {
 	return nil
+}
+
+func (ctx *rootContext) GetProperty(key string) (string, WasmResult) {
+	if ctx.propertyMap == nil {
+		return "", WasmResultInternalFailure
+	}
+	if value, ok := ctx.propertyMap[key]; !ok {
+		return "", WasmResultNotFound
+	} else {
+		return value, WasmResultOk
+	}
+}
+
+func (ctx *rootContext) SetProperty(key string, value string) WasmResult {
+	if ctx.propertyMap == nil {
+		return WasmResultInternalFailure
+	}
+	ctx.propertyMap[key] = value
+	return WasmResultOk
 }
 
 type wasmContext struct {
@@ -210,7 +231,6 @@ func (wasm *wasmContext) GetMetric(metricId uint32) (uint64, WasmResult) {
 	return 0, WasmResultUnimplemented
 }
 
-
 func (wasm *wasmContext) RegisterSharedQueue(queueName string) (uint32, WasmResult) {
 	log.DefaultLogger.Errorf("instanceContext.RegisterSharedQueue() unimplemented")
 	return 0, WasmResultUnimplemented
@@ -236,11 +256,18 @@ func (wasm *wasmContext) GetSharedData(key string) (value string, cas uint32, re
 	return "", 0, WasmResultUnimplemented
 }
 
-func (wasm *wasmContext) SetSharedData(key string, value string, cas uint32) WasmResult{
+func (wasm *wasmContext) SetSharedData(key string, value string, cas uint32) WasmResult {
 	log.DefaultLogger.Errorf("instanceContext.SetSharedData() unimplemented")
 	return WasmResultUnimplemented
 }
 
+func (wasm *wasmContext) GetProperty(key string) (string, WasmResult) {
+	return wasm.rootContext.GetProperty(key)
+}
+
+func (wasm *wasmContext) SetProperty(key string, value string) WasmResult {
+	return wasm.rootContext.SetProperty(key, value)
+}
 
 func (wasm *wasmContext) GetBuffer(bufferType BufferType) ([]byte, WasmResult) {
 	switch bufferType {

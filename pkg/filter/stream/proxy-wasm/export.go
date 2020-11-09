@@ -3,8 +3,10 @@ package proxywasm
 // #include <stdlib.h>
 //
 // extern int proxy_log(void *context, int, int, int);
-// extern int proxy_get_property(void *context, int, int, int, int);
 // extern int proxy_set_effective_context(void *context, int);
+//
+// extern int proxy_get_property(void *context, int, int, int, int);
+// extern int proxy_set_property(void *context, int, int, int, int);
 //
 // extern int proxy_get_buffer_bytes(void *context, int, int, int, int, int);
 // extern int proxy_set_buffer_bytes(void *context, int, int, int, int, int);
@@ -50,12 +52,13 @@ import (
 	"mosn.io/mosn/pkg/log"
 )
 
-
 func ProxyWasmImports() *wasm.Imports {
 	im := wasm.NewImports()
 	im, _ = im.AppendFunction("proxy_log", proxy_log, C.proxy_log)
-	im, _ = im.AppendFunction("proxy_get_property", proxy_get_property, C.proxy_get_property)
 	im, _ = im.AppendFunction("proxy_set_effective_context", proxy_set_effective_context, C.proxy_set_effective_context)
+
+	im, _ = im.AppendFunction("proxy_get_property", proxy_get_property, C.proxy_get_property)
+	im, _ = im.AppendFunction("proxy_set_property", proxy_set_property, C.proxy_set_property)
 
 	im, _ = im.AppendFunction("proxy_get_buffer_bytes", proxy_get_buffer_bytes, C.proxy_get_buffer_bytes)
 	im, _ = im.AppendFunction("proxy_set_buffer_bytes", proxy_set_buffer_bytes, C.proxy_set_buffer_bytes)
@@ -160,7 +163,7 @@ func proxy_set_buffer_bytes(context unsafe.Pointer, bufferType int32, start int3
 	if start > start+length {
 		return WasmResultBadArgument.Int32()
 	}
-	if start + length > int32(len(buffer)) {
+	if start+length > int32(len(buffer)) {
 		length = int32(len(buffer)) - start
 	}
 	if dataSize > length {
@@ -173,7 +176,6 @@ func proxy_set_buffer_bytes(context unsafe.Pointer, bufferType int32, start int3
 
 	return result.Int32()
 }
-
 
 //export proxy_get_header_map_pairs
 func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, returnDataPtr int32, returnDataSize int32) int32 {
@@ -235,7 +237,6 @@ func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, returnDat
 
 	return WasmResultOk.Int32()
 }
-
 
 // unmarshal map from rawData
 func unmarshalMap(rawData []byte) map[string]string {
@@ -412,20 +413,30 @@ func proxy_log(context unsafe.Pointer, logLevel int32, messageData int32, messag
 }
 
 //export proxy_get_property
-func proxy_get_property(context unsafe.Pointer, pathData int32, pathSize int32, returnValueData int32, returnValueSize int32) int32 {
+func proxy_get_property(context unsafe.Pointer, keyPtr int32, keySize int32, returnValueData int32, returnValueSize int32) int32 {
 
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
 	memory := ctx.instance.Memory.Data()
 
-	//key := string(memory[pathData : pathData+pathSize])
+	key := string(memory[keyPtr : keyPtr+keySize])
+	if key == "" {
+		return WasmResultBadArgument.Int32()
+	}
 
-	// TODO: property not exist
-	//value := ctx.rootContext.GetProperty(key)
-	//if value == "" {
-	//	return 0
-	//}
-	value := "my_root_id"
+	// TODO: for stupid proxy-wasm-cpp-sdk, otherwise it will abort :-)
+	if key == "plugin_root_id" {
+		return WasmResultOk.Int32()
+	}
+
+	value, result := ctx.GetProperty(key)
+	if result != WasmResultOk {
+		return result.Int32()
+	}
+	if len(value) == 0 {
+		binary.LittleEndian.PutUint32(memory[returnValueSize:], uint32(0))
+		return WasmResultOk.Int32()
+	}
 
 	addr, err := ctx.malloc(int32(len(value)))
 	if err != nil {
@@ -439,9 +450,35 @@ func proxy_get_property(context unsafe.Pointer, pathData int32, pathSize int32, 
 	return WasmResultOk.Int32()
 }
 
+// Set the value of a property
+//export proxy_set_property
+func proxy_set_property(context unsafe.Pointer, keyPtr int32, keySize int32, valuePtr int32, valueSize int32) int32 {
+	var instanceCtx = wasm.IntoInstanceContext(context)
+	ctx := instanceCtx.Data().(*wasmContext)
+	memory := ctx.instance.Memory.Data()
+
+	if keyPtr > keyPtr+keySize {
+		return WasmResultBadArgument.Int32()
+	}
+	if valuePtr > valuePtr+valueSize {
+		return WasmResultBadArgument.Int32()
+	}
+
+	key := string(memory[keyPtr : keyPtr+keySize])
+	if key == "" {
+		return WasmResultBadArgument.Int32()
+	}
+	value := string(memory[valuePtr : valuePtr+valueSize])
+
+	result := ctx.SetProperty(key, value)
+
+	return result.Int32()
+}
+
+// TODO
 //export proxy_set_effective_context
 func proxy_set_effective_context(context unsafe.Pointer, context_id int32) int32 {
-	return 0
+	return WasmResultOk.Int32()
 }
 
 // Set timer period. Once set, the host environment will call proxy_on_tick every tick_period_milliseconds.

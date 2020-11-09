@@ -13,7 +13,8 @@ var rootWasmInstance *wasmContext
 
 func initWasmVM(config *StreamProxyWasmConfig) {
 	RootContext = &rootContext{
-		config: config,
+		config:      config,
+		propertyMap: make(map[string]string),
 	}
 	var err error
 
@@ -48,8 +49,8 @@ func NewWasmInstance() *wasmContext {
 	id++
 	instanceCtx := &wasmContext{
 		rootContext: RootContext,
-		contextId: id,
-		instance:  &instance,
+		contextId:   id,
+		instance:    &instance,
 	}
 
 	// _start must be in the front of SetContextData, don't ask me why

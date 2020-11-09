@@ -46,7 +46,7 @@
                         {
                             "type": "proxy-wasm",
                             "config": {
-                                "path":"./pkg/filter/stream/proxy-wasm/data/go-test.wasm"
+                                "path":"./pkg/filter/stream/proxy-wasm/data/envoy_filter_http_wasm_example2.wasm"
                             }
                         }
                     ]
