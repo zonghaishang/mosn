@@ -68,3 +68,9 @@ func NewListenerStats(listenerName string) types.Metrics {
 	metrics, _ := NewMetrics(DownstreamType, map[string]string{"listener": listenerName})
 	return metrics
 }
+
+// NewWasmStats return s a stats with namespace prefix wasm
+func NewWasmStats(wasmExtensionName string) types.Metrics {
+	metrics, _ := NewMetrics(DownstreamType, map[string]string{"wasm": wasmExtensionName})
+	return metrics
+}

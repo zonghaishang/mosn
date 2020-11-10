@@ -31,8 +31,8 @@ package proxywasm
 // extern int proxy_http_call(void *context, int, int, int, int, int, int, int, int, int, int);
 //
 // extern int proxy_define_metric(void *context, int, int, int, int);
-// extern int proxy_increment_metric(void *context, int, int);
-// extern int proxy_record_metric(void *context, int, int);
+// extern int proxy_increment_metric(void *context, int, int64_t);
+// extern int proxy_record_metric(void *context, int, int64_t);
 // extern int proxy_get_metric(void *context, int, int);
 //
 // extern int proxy_register_shared_queue(void *context, int, int, int);
@@ -578,7 +578,7 @@ func proxy_define_metric(context unsafe.Pointer, metricType int32, namePtr int32
 }
 
 //export proxy_increment_metric
-func proxy_increment_metric(context unsafe.Pointer, metricId int32, offset int32) int32 {
+func proxy_increment_metric(context unsafe.Pointer, metricId int32, offset int64) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
 
@@ -591,7 +591,7 @@ func proxy_increment_metric(context unsafe.Pointer, metricId int32, offset int32
 }
 
 //export proxy_record_metric
-func proxy_record_metric(context unsafe.Pointer, metricId int32, value int32) int32 {
+func proxy_record_metric(context unsafe.Pointer, metricId int32, value int64) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
 

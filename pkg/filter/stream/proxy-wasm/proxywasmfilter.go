@@ -16,6 +16,7 @@ func init() {
 const ProxyWasm = "proxy-wasm"
 
 type StreamProxyWasmConfig struct {
+	Name string `json:"name"`
 	Path string `json:"path"`
 }
 

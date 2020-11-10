@@ -15,6 +15,7 @@ func initWasmVM(config *StreamProxyWasmConfig) {
 	RootContext = &rootContext{
 		config:      config,
 		propertyMap: make(map[string]string),
+		metrics:     newWasmMetricsManager(config.Name),
 	}
 	var err error
 

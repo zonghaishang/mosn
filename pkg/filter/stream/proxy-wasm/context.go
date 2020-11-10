@@ -166,6 +166,8 @@ type rootContext struct {
 	wasmImportObj *wasm.ImportObject
 
 	propertyMap map[string]string
+
+	metrics *metricsManager
 }
 
 func (ctx *rootContext) GetVmConfiguration() []byte {
@@ -195,6 +197,33 @@ func (ctx *rootContext) SetProperty(key string, value string) WasmResult {
 	return WasmResultOk
 }
 
+func (ctx *rootContext) DefineMetric(metricType MetricType, name string) (uint32, WasmResult) {
+	switch metricType {
+	case MetricTypeCounter:
+		return ctx.metrics.newCounter(name), WasmResultOk
+	case MetricTypeGauge:
+		return ctx.metrics.newGauge(name), WasmResultOk
+	case MetricTypeHistogram:
+		return ctx.metrics.newHistogram(name), WasmResultOk
+	}
+	return 0, WasmResultBadArgument
+}
+
+func (ctx *rootContext) IncrementMetric(metricId uint32, offset int64) WasmResult {
+	ctx.metrics.incrementMetric(metricId, offset)
+	return WasmResultOk
+}
+
+func (ctx *rootContext) RecordMetric(metricId uint32, value uint64) WasmResult {
+	ctx.metrics.recordMetric(metricId, int64(value))
+	return WasmResultOk
+}
+
+func (ctx *rootContext) GetMetric(metricId uint32) (uint64, WasmResult) {
+	value := ctx.metrics.getMetric(metricId)
+	return uint64(value), WasmResultOk
+}
+
 type wasmContext struct {
 	rootContext *rootContext
 	contextId   int32
@@ -212,23 +241,19 @@ func (wasm *wasmContext) GetCurrentTimeNanoseconds() (int, WasmResult) {
 }
 
 func (wasm *wasmContext) DefineMetric(metricType MetricType, name string) (uint32, WasmResult) {
-	log.DefaultLogger.Errorf("instanceContext.DefineMetric() unimplemented")
-	return 0, WasmResultUnimplemented
+	return wasm.rootContext.DefineMetric(metricType, name)
 }
 
 func (wasm *wasmContext) IncrementMetric(metricId uint32, offset int64) WasmResult {
-	log.DefaultLogger.Errorf("instanceContext.IncrementMetric() unimplemented")
-	return WasmResultUnimplemented
+	return wasm.rootContext.IncrementMetric(metricId, offset)
 }
 
 func (wasm *wasmContext) RecordMetric(metricId uint32, value uint64) WasmResult {
-	log.DefaultLogger.Errorf("instanceContext.RecordMetric() unimplemented")
-	return WasmResultUnimplemented
+	return wasm.rootContext.RecordMetric(metricId, value)
 }
 
 func (wasm *wasmContext) GetMetric(metricId uint32) (uint64, WasmResult) {
-	log.DefaultLogger.Errorf("instanceContext.GetMetric() unimplemented")
-	return 0, WasmResultUnimplemented
+	return wasm.rootContext.GetMetric(metricId)
 }
 
 func (wasm *wasmContext) RegisterSharedQueue(queueName string) (uint32, WasmResult) {

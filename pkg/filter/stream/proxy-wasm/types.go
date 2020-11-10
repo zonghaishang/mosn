@@ -1,6 +1,5 @@
 package proxywasm
 
-
 type MapType int32
 
 const (
