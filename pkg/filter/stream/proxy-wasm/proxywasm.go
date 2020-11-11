@@ -22,11 +22,13 @@ func initWasmVM(config *StreamProxyWasmConfig) {
 	RootContext.wasmCode, err = wasm.ReadBytes(config.Path)
 	if err != nil {
 		log.DefaultLogger.Errorf("wasm fail to read code bytes, err: %v", err)
+		return
 	}
 
 	RootContext.wasmModule, err = wasm.Compile(RootContext.wasmCode)
 	if err != nil {
 		log.DefaultLogger.Errorf("wasm fail to compile wasm code, err: %v", err)
+		return
 	}
 	RootContext.wasiVersion = wasm.WasiGetVersion(RootContext.wasmModule)
 
@@ -41,30 +43,34 @@ func initWasmVM(config *StreamProxyWasmConfig) {
 }
 
 func NewWasmInstance() *wasmContext {
-	instance, err := RootContext.wasmModule.InstantiateWithImportObject(RootContext.wasmImportObj)
-	if err != nil {
-		log.DefaultLogger.Errorf("wasm instance error :%v", err)
-		return nil
-	}
-
 	id++
 	instanceCtx := &wasmContext{
 		rootContext: RootContext,
 		contextId:   id,
-		instance:    &instance,
+	}
+
+	instance, err := RootContext.wasmModule.InstantiateWithImportObject(RootContext.wasmImportObj)
+	if err != nil {
+		log.DefaultLogger.Errorf("wasm instance error :%v", err)
+		instanceCtx.ProxyWasmInstance = &NilWasmInstance{}
+		return instanceCtx
+	} else {
+		instanceCtx.ProxyWasmInstance = &WasmerInstance{instance}
 	}
 
 	// _start must be in the front of SetContextData, don't ask me why
 	if err := instanceCtx._start(); err != nil {
 		log.DefaultLogger.Errorf("wasm start err: %v\n", err)
-		return nil
+		instanceCtx.ProxyWasmInstance = &NilWasmInstance{}
+		return instanceCtx
 	}
 
 	instance.SetContextData(instanceCtx)
 
 	if err := instanceCtx.proxy_on_context_create(int32(root_id), 0); err != nil {
 		log.DefaultLogger.Errorf("root err %v\n", err)
-		return nil
+		instanceCtx.ProxyWasmInstance = &NilWasmInstance{}
+		return instanceCtx
 	}
 
 	return instanceCtx

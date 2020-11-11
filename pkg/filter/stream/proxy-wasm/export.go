@@ -104,7 +104,7 @@ func proxy_get_buffer_bytes(context unsafe.Pointer, bufferType int32, start int3
 
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if BufferType(bufferType) > BufferTypeMax {
 		return WasmResultBadArgument.Int32()
@@ -147,7 +147,7 @@ func proxy_set_buffer_bytes(context unsafe.Pointer, bufferType int32, start int3
 
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if BufferType(bufferType) > BufferTypeMax ||
 		(BufferType(bufferType) != BufferTypeHttpRequestBody && BufferType(bufferType) != BufferTypeHttpResponseBody) {
@@ -182,7 +182,7 @@ func proxy_get_header_map_pairs(context unsafe.Pointer, mapType int32, returnDat
 	log.DefaultLogger.Debugf("wasm call host.proxy_get_header_map_pairs")
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
@@ -269,7 +269,7 @@ func proxy_set_header_map_pairs(context unsafe.Pointer, mapType int32, ptr int32
 	log.DefaultLogger.Debugf("wasm call host.proxy_set_header_map_pairs")
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
@@ -302,7 +302,7 @@ func proxy_get_header_map_value(context unsafe.Pointer, mapType int32, keyDataPt
 	log.DefaultLogger.Debugf("wasm call host.proxy_get_header_map_value")
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
@@ -336,7 +336,7 @@ func proxy_replace_header_map_value(context unsafe.Pointer, mapType int32, keyDa
 	log.DefaultLogger.Debugf("wasm call host.proxy_replace_header_map_value")
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
@@ -359,7 +359,7 @@ func proxy_add_header_map_value(context unsafe.Pointer, mapType int32, keyData i
 	log.DefaultLogger.Debugf("wasm call host.proxy_add_header_map_value")
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
@@ -385,7 +385,7 @@ func proxy_remove_header_map_value(context unsafe.Pointer, mapType int32, keyDat
 	log.DefaultLogger.Debugf("wasm call host.proxy_remove_header_map_value")
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
@@ -417,7 +417,7 @@ func proxy_get_property(context unsafe.Pointer, keyPtr int32, keySize int32, ret
 
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	key := string(memory[keyPtr : keyPtr+keySize])
 	if key == "" {
@@ -455,7 +455,7 @@ func proxy_get_property(context unsafe.Pointer, keyPtr int32, keySize int32, ret
 func proxy_set_property(context unsafe.Pointer, keyPtr int32, keySize int32, valuePtr int32, valueSize int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if keyPtr > keyPtr+keySize {
 		return WasmResultBadArgument.Int32()
@@ -493,7 +493,7 @@ func proxy_set_tick_period_milliseconds(context unsafe.Pointer, tickPeriodMillis
 func proxy_get_current_time_nanoseconds(context unsafe.Pointer, resultUint64Ptr int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	nanoSecond, result := ctx.GetCurrentTimeNanoseconds()
 	if result != WasmResultOk {
@@ -553,7 +553,7 @@ func proxy_http_call(context unsafe.Pointer,
 func proxy_define_metric(context unsafe.Pointer, metricType int32, namePtr int32, nameSize int32, resultPtr int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if MetricType(metricType) > MetricTypeMax {
 		return WasmResultBadArgument.Int32()
@@ -607,7 +607,7 @@ func proxy_record_metric(context unsafe.Pointer, metricId int32, value int64) in
 func proxy_get_metric(context unsafe.Pointer, metricId int32, resultUint64Ptr int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	value, result := ctx.GetMetric(uint32(metricId))
 	if result != WasmResultOk {
@@ -623,7 +623,7 @@ func proxy_get_metric(context unsafe.Pointer, metricId int32, resultUint64Ptr in
 func proxy_register_shared_queue(context unsafe.Pointer, queueNamePtr int32, queueNameSize int32, tokenPtr int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if queueNamePtr > queueNamePtr+queueNameSize {
 		return WasmResultBadArgument.Int32()
@@ -649,7 +649,7 @@ func proxy_register_shared_queue(context unsafe.Pointer, queueNamePtr int32, que
 func proxy_resolve_shared_queue(context unsafe.Pointer, vmIdPtr int32, vmIdSize int32, queueNamePtr int32, queueNameSize int32, tokenPtr int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if queueNamePtr > queueNamePtr+queueNameSize {
 		return WasmResultBadArgument.Int32()
@@ -674,7 +674,7 @@ func proxy_resolve_shared_queue(context unsafe.Pointer, vmIdPtr int32, vmIdSize 
 func proxy_dequeue_shared_queue(context unsafe.Pointer, token int32, dataPtr int32, dataSize int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if dataPtr > dataPtr+dataSize {
 		return WasmResultBadArgument.Int32()
@@ -693,7 +693,7 @@ func proxy_dequeue_shared_queue(context unsafe.Pointer, token int32, dataPtr int
 func proxy_enqueue_shared_queue(context unsafe.Pointer, token int32, dataPtr int32, dataSize int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	if dataPtr > dataPtr+dataSize {
 		return WasmResultBadArgument.Int32()
@@ -714,7 +714,7 @@ func proxy_enqueue_shared_queue(context unsafe.Pointer, token int32, dataPtr int
 func proxy_get_shared_data(context unsafe.Pointer, keyPtr int32, keySize int32, valuePtr int32, valueSizePtr int32, casPtr int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	key := string(memory[keyPtr : keyPtr+keySize])
 
@@ -744,7 +744,7 @@ func proxy_get_shared_data(context unsafe.Pointer, keyPtr int32, keySize int32, 
 func proxy_set_shared_data(context unsafe.Pointer, keyPtr int32, keySize int32, valuePtr int32, valueSize int32, cas int32) int32 {
 	var instanceCtx = wasm.IntoInstanceContext(context)
 	ctx := instanceCtx.Data().(*wasmContext)
-	memory := ctx.instance.Memory.Data()
+	memory := ctx.GetMemory()
 
 	key := string(memory[keyPtr : keyPtr+keySize])
 	value := string(memory[valuePtr : valuePtr+valueSize])
