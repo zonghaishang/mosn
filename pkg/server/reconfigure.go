@@ -33,10 +33,10 @@ import (
 )
 
 func init() {
-	keeper.AddSignalCallback(syscall.SIGHUP, func() {
+	keeper.AddSignalCallback(func() {
 		// reload, fork new mosn
 		reconfigure(true)
-	})
+	}, syscall.SIGHUP)
 }
 
 var GracefulTimeout = time.Second * 30 //default 30s
@@ -88,6 +88,8 @@ func reconfigure(start bool) {
 	n, err = listenSockConn.Read(buf[:])
 	if n != 1 {
 		log.DefaultLogger.Alertf(types.ErrorKeyReconfigure, "new mosn start failed")
+		// Restore PID
+		keeper.WritePidFile()
 		return
 	}
 

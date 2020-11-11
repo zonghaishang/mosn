@@ -41,9 +41,6 @@ type ClusterManager interface {
 	// Add Cluster health check callbacks
 	AddClusterHealthCheckCallbacks(name string, cb HealthCheckCb) error
 
-	// GetAllClusters returns all cluster name in the cluster manager
-	GetAllClusters() []string
-
 	// Get, use to get the snapshot of a cluster
 	GetClusterSnapshot(context context.Context, cluster string) ClusterSnapshot
 
@@ -60,6 +57,9 @@ type ClusterManager interface {
 	// Get or Create tcp conn pool for a cluster
 	TCPConnForCluster(balancerContext LoadBalancerContext, snapshot ClusterSnapshot) CreateConnectionData
 
+	// Get or Create tcp conn pool for a cluster
+	UDPConnForCluster(balancerContext LoadBalancerContext, snapshot ClusterSnapshot) CreateConnectionData
+
 	// ConnPoolForCluster used to get protocol related conn pool
 	ConnPoolForCluster(balancerContext LoadBalancerContext, snapshot ClusterSnapshot, protocol api.Protocol) ConnectionPool
 
@@ -71,6 +71,11 @@ type ClusterManager interface {
 
 	// RemoveClusterHosts, remove the host by address string
 	RemoveClusterHosts(clusterName string, hosts []string) error
+
+	// TLSManager is used to cluster tls config
+	GetTLSManager() TLSClientContextManager
+	// UpdateTLSManager updates the tls manager which is used to cluster tls config
+	UpdateTLSManager(*v2.TLSConfig)
 
 	// Destroy the cluster manager
 	Destroy()
@@ -135,6 +140,9 @@ type Host interface {
 	// Create a connection for this host.
 	CreateConnection(context context.Context) CreateConnectionData
 
+	// Create a udp connection for this host.
+	CreateUDPConnection(context context.Context) CreateConnectionData
+
 	// Address returns the host's Addr structure
 	Address() net.Addr
 	// Config creates a host config by the host attributes
@@ -165,7 +173,7 @@ type ClusterInfo interface {
 	ResourceManager() ResourceManager
 
 	// TLSMng returns the tls manager
-	TLSMng() TLSContextManager
+	TLSMng() TLSClientContextManager
 
 	// LbSubsetInfo returns the load balancer subset's config
 	LbSubsetInfo() LBSubsetInfo

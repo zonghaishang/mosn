@@ -103,6 +103,10 @@ func (conn *streamConnection) Protocol() types.ProtocolName {
 	return protocol.HTTP2
 }
 
+func (conn *streamConnection) EnableWorkerPool() bool {
+	return true
+}
+
 func (conn *streamConnection) GoAway() {
 	// todo
 }
@@ -299,6 +303,7 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 		URL, _ := url.Parse(URI)
 		h2s.Request.URL = URL
 
+		header.Set(protocol.MosnHeaderScheme, scheme)
 		header.Set(protocol.MosnHeaderMethod, h2s.Request.Method)
 		header.Set(protocol.MosnHeaderHostKey, h2s.Request.Host)
 		header.Set(protocol.MosnHeaderPathKey, h2s.Request.URL.Path)
@@ -709,8 +714,11 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 		}
 
 		if endStream {
-			stream.receiver.OnReceive(stream.ctx, header, nil, nil)
+			if stream.receiver == nil {
+				return
+			}
 
+			stream.receiver.OnReceive(stream.ctx, header, nil, nil)
 			conn.mutex.Lock()
 			delete(conn.streams, id)
 			conn.mutex.Unlock()
@@ -751,7 +759,7 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 	if endStream {
 		if conn.useStream {
 			stream.recData.CloseWithError(io.EOF)
-		} else {
+		} else if stream.receiver != nil {
 			stream.receiver.OnReceive(stream.ctx, stream.header, stream.recData, stream.trailer)
 		}
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
@@ -816,6 +824,8 @@ func (s *clientStream) AppendHeaders(ctx context.Context, headersIn api.HeaderMa
 	if _, ok := s.conn.RawConn().(*mtls.TLSConn); ok {
 		scheme = "https"
 	}
+
+	headersIn.Del(protocol.MosnHeaderScheme)
 
 	var method string
 	if m, ok := headersIn.Get(protocol.MosnHeaderMethod); ok {
