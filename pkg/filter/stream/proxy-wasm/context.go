@@ -1,26 +1,27 @@
 package proxywasm
 
 import (
-	"time"
-
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
 	"mosn.io/api"
 	"mosn.io/mosn/pkg/log"
 	"mosn.io/pkg/buffer"
+	"time"
 )
 
-type ContextBase interface {
+type ProxyWasmContextBase interface {
+	WasmGeneralInterface
+	WasmSharedDataInterface
+	WasmSharedQueueInterface
+	WasmMetricsInterface
+}
 
-	//
-	// GeneralInterface
-	//
-
+type WasmGeneralInterface interface {
 	// Provides the status of the last call into the VM or out of the VM, similar to errno.
 	// return the status code and a descriptive string.
-	GetStatus() (statusCode int32, statusDescribe string, result WasmResult)
+	//GetStatus() (statusCode int32, statusDescribe string, result WasmResult)
 
 	// Return the current log level in the host
-	GetLogLevel() (uint32, WasmResult)
+	//GetLogLevel() (uint32, WasmResult)
 
 	// Get the value of a property.  Some properties are proxy-independent (e.g. ["plugin_root_id"])
 	// while others can be proxy-specific.
@@ -30,7 +31,7 @@ type ContextBase interface {
 	SetProperty(key string, value string) WasmResult
 
 	// Returns plugin configuration.
-	GetConfiguration() string
+	//GetConfiguration() string
 
 	// Provides the current time in nanoseconds since the Unix epoch.
 	GetCurrentTimeNanoseconds() (int, WasmResult)
@@ -43,14 +44,12 @@ type ContextBase interface {
 	// 		zero, a new timer will be allocated its token will be set.  If the target is non-zero, then
 	// 		that timer will have the new period (or be reset/deleted if period is zero).
 	SetTimerPeriod(period int64, timer uint32) WasmResult
+}
 
-	//
-	// SharedDataInterface
-	//
-	// SharedDataInterface is for sharing data between VMs. In general the VMs may be on different
-	// threads. Keys can have any format, but good practice would use reverse DNS and namespacing
-	// prefixes to avoid conflicts.
-
+// SharedDataInterface is for sharing data between VMs. In general the VMs may be on different
+// threads. Keys can have any format, but good practice would use reverse DNS and namespacing
+// prefixes to avoid conflicts.
+type WasmSharedDataInterface interface {
 	// Get proxy-wide key-value data shared between VMs.
 	// @param key is a proxy-wide key mapping to the shared data value.
 	// @param cas is a number which will be incremented when a data value has been changed.
@@ -64,11 +63,9 @@ type ContextBase interface {
 	// 		the cas associated with the value.
 	// @param data is a location to store the returned value.
 	SetSharedData(key string, value string, cas uint32) WasmResult
+}
 
-	//
-	// SharedQueueInterface
-	//
-
+type WasmSharedQueueInterface interface {
 	// Register a proxy-wide queue, return a token corresponding to the queue.
 	RegisterSharedQueue(queueName string) (uint32, WasmResult)
 
@@ -80,11 +77,9 @@ type ContextBase interface {
 
 	// Enqueue a message on a shared queue
 	EnqueueSharedQueue(queueToken uint32, data string) WasmResult
+}
 
-	//
-	// MetricsInterface
-	//
-
+type WasmMetricsInterface interface {
 	// Define a metric (Stat)
 	DefineMetric(metricType MetricType, name string) (uint32, WasmResult)
 
@@ -96,10 +91,9 @@ type ContextBase interface {
 
 	// Get the current value of a metric
 	GetMetric(metricId uint32) (uint64, WasmResult)
+}
 
-	//
-	// Buffer/HeaderMap
-	//
+type WasmL7interface interface {
 	GetBuffer(bufferType BufferType) ([]byte, WasmResult)
 	SetBuffer(bufferType BufferType, buf []byte) WasmResult
 	GetHeaderMap(mapType MapType) (api.HeaderMap, WasmResult)
@@ -158,11 +152,6 @@ type ProxyWasmExports interface {
 
 type rootContext struct {
 	config *StreamProxyWasmConfig
-
-	//vmConfig     string
-	//pluginConfig string
-	//
-	//contextId    uint32
 
 	wasmCode      []byte
 	wasmModule    wasm.Module
@@ -228,75 +217,51 @@ func (ctx *rootContext) GetMetric(metricId uint32) (uint64, WasmResult) {
 	return uint64(value), WasmResultOk
 }
 
-type wasmContext struct {
-	rootContext *rootContext
-	contextId   int32
-	filter      *streamProxyWasmFilter
-	
-	ProxyWasmInstance
-}
-
-func (wasm *wasmContext) SetTimerPeriod(period int64, timer uint32) WasmResult {
-	log.DefaultLogger.Errorf("wasmContext.SetTimerPeriod() unimplemented")
-	return WasmResultUnimplemented
-}
-
-func (wasm *wasmContext) GetCurrentTimeNanoseconds() (int, WasmResult) {
-	return time.Now().Nanosecond(), WasmResultOk
-}
-
-func (wasm *wasmContext) DefineMetric(metricType MetricType, name string) (uint32, WasmResult) {
-	return wasm.rootContext.DefineMetric(metricType, name)
-}
-
-func (wasm *wasmContext) IncrementMetric(metricId uint32, offset int64) WasmResult {
-	return wasm.rootContext.IncrementMetric(metricId, offset)
-}
-
-func (wasm *wasmContext) RecordMetric(metricId uint32, value uint64) WasmResult {
-	return wasm.rootContext.RecordMetric(metricId, value)
-}
-
-func (wasm *wasmContext) GetMetric(metricId uint32) (uint64, WasmResult) {
-	return wasm.rootContext.GetMetric(metricId)
-}
-
-func (wasm *wasmContext) RegisterSharedQueue(queueName string) (uint32, WasmResult) {
-	log.DefaultLogger.Errorf("instanceContext.RegisterSharedQueue() unimplemented")
+func (ctx *rootContext) RegisterSharedQueue(queueName string) (uint32, WasmResult) {
+	log.DefaultLogger.Errorf("rootContext.RegisterSharedQueue() unimplemented")
 	return 0, WasmResultUnimplemented
 }
 
-func (wasm *wasmContext) LookupSharedQueue(queueName string) (uint32, WasmResult) {
-	log.DefaultLogger.Errorf("instanceContext.LookupSharedQueue() unimplemented")
+func (ctx *rootContext) LookupSharedQueue(queueName string) (uint32, WasmResult) {
+	log.DefaultLogger.Errorf("rootContext.LookupSharedQueue() unimplemented")
 	return 0, WasmResultUnimplemented
 }
 
-func (wasm *wasmContext) DequeueSharedQueue(queueToken uint32, data string) WasmResult {
-	log.DefaultLogger.Errorf("instanceContext.DequeueSharedQueue() unimplemented")
+func (ctx *rootContext) DequeueSharedQueue(queueToken uint32, data string) WasmResult {
+	log.DefaultLogger.Errorf("rootContext.DequeueSharedQueue() unimplemented")
 	return WasmResultUnimplemented
 }
 
-func (wasm *wasmContext) EnqueueSharedQueue(queueToken uint32, data string) WasmResult {
-	log.DefaultLogger.Errorf("instanceContext.EnqueueSharedQueue() unimplemented")
+func (ctx *rootContext) EnqueueSharedQueue(queueToken uint32, data string) WasmResult {
+	log.DefaultLogger.Errorf("rootContext.EnqueueSharedQueue() unimplemented")
 	return WasmResultUnimplemented
 }
 
-func (wasm *wasmContext) GetSharedData(key string) (value string, cas uint32, result WasmResult) {
-	log.DefaultLogger.Errorf("instanceContext.GetSharedData() unimplemented")
+func (ctx *rootContext) GetSharedData(key string) (value string, cas uint32, result WasmResult) {
+	log.DefaultLogger.Errorf("rootContext.GetSharedData() unimplemented")
 	return "", 0, WasmResultUnimplemented
 }
 
-func (wasm *wasmContext) SetSharedData(key string, value string, cas uint32) WasmResult {
-	log.DefaultLogger.Errorf("instanceContext.SetSharedData() unimplemented")
+func (ctx *rootContext) SetSharedData(key string, value string, cas uint32) WasmResult {
+	log.DefaultLogger.Errorf("rootContext.SetSharedData() unimplemented")
 	return WasmResultUnimplemented
 }
 
-func (wasm *wasmContext) GetProperty(key string) (string, WasmResult) {
-	return wasm.rootContext.GetProperty(key)
+func (ctx *rootContext) SetTimerPeriod(period int64, timer uint32) WasmResult {
+	log.DefaultLogger.Errorf("rootContext.SetTimerPeriod() unimplemented")
+	return WasmResultUnimplemented
 }
 
-func (wasm *wasmContext) SetProperty(key string, value string) WasmResult {
-	return wasm.rootContext.SetProperty(key, value)
+func (ctx *rootContext) GetCurrentTimeNanoseconds() (int, WasmResult) {
+	return time.Now().Nanosecond(), WasmResultOk
+}
+
+type wasmContext struct {
+	*rootContext
+	contextId int32
+	filter    *streamProxyWasmFilter
+
+	ProxyWasmInstance
 }
 
 func (wasm *wasmContext) GetBuffer(bufferType BufferType) ([]byte, WasmResult) {

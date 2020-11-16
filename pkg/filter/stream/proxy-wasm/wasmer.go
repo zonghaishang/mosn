@@ -1,10 +1,10 @@
 package proxywasm
 
 import (
-"errors"
+	"errors"
 
-"github.com/wasmerio/go-ext-wasm/wasmer"
-"mosn.io/mosn/pkg/log"
+	"github.com/wasmerio/go-ext-wasm/wasmer"
+	"mosn.io/mosn/pkg/log"
 )
 
 type WasmerInstance struct {

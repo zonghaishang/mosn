@@ -1,6 +1,6 @@
 package proxywasm
 
-type NilWasmInstance struct {}
+type NilWasmInstance struct{}
 
 func (instance *NilWasmInstance) GetMemory() []byte {
 	return nil
@@ -125,6 +125,3 @@ func (instance *NilWasmInstance) proxy_validate_configuration(rootContextId int3
 func (instance *NilWasmInstance) proxy_on_foreign_function(rootContextId int32, functionId int32, dataSize int32) error {
 	return nil
 }
-
-
-

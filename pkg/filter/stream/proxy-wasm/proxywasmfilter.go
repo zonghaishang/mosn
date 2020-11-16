@@ -16,12 +16,17 @@ func init() {
 const ProxyWasm = "proxy-wasm"
 
 type StreamProxyWasmConfig struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	WasmConfigBase
+	Hello string `json:"hello, omitempty"`
+}
+
+func (s *StreamProxyWasmConfig) GetData() interface{} {
+	return s.Hello
 }
 
 type FilterConfigFactory struct {
-	Config *StreamProxyWasmConfig
+	//Config *StreamProxyWasmConfig
+	Config *WasmConfigWrapper
 }
 
 func CreateProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilterChainFactory, error) {
@@ -31,11 +36,17 @@ func CreateProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilter
 		return nil, err
 	}
 
-	initWasmVM(cfg)
-	rootWasmInstance = NewWasmInstance()
+	wasmConfigManager := GetWasmConfigManger()
+	err = wasmConfigManager.AddOrUpdateWasmConfig(cfg)
+	if err != nil {
+
+	}
+	configWarpper := wasmConfigManager.GetWasmConfigByName(cfg.GetName())
+
+	rootWasmInstance := configWarpper.wasmModule.NewInstance()
 	if rootWasmInstance == nil {
 		log.DefaultLogger.Errorf("wasm init error")
-		return &FilterConfigFactory{cfg}, nil
+		return &FilterConfigFactory{configWarpper}, nil
 	}
 
 	if _, err := rootWasmInstance.proxy_on_vm_start(int32(root_id), 1000); err != nil {
@@ -44,7 +55,7 @@ func CreateProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilter
 
 	log.DefaultLogger.Debugf("wasm init %+v", rootWasmInstance)
 
-	return &FilterConfigFactory{cfg}, nil
+	return &FilterConfigFactory{configWarpper}, nil
 }
 
 // ParseStreamPayloadLimitFilter
@@ -74,18 +85,18 @@ type streamProxyWasmFilter struct {
 	ctx      context.Context
 	rhandler api.StreamReceiverFilterHandler
 	shandler api.StreamSenderFilterHandler
-	config   *StreamProxyWasmConfig
+	config *WasmConfigWrapper
 	*wasmContext
 }
 
-func NewFilter(ctx context.Context, config *StreamProxyWasmConfig) *streamProxyWasmFilter {
+func NewFilter(ctx context.Context, config *WasmConfigWrapper) *streamProxyWasmFilter {
 	if log.Proxy.GetLogLevel() >= log.DEBUG {
 		log.DefaultLogger.Debugf("create a new proxy wasm filter")
 	}
 	filter := &streamProxyWasmFilter{
 		ctx:         ctx,
 		config:      config,
-		wasmContext: NewWasmInstance(),
+		wasmContext: config.wasmModule.NewInstance(),
 	}
 	filter.wasmContext.filter = filter
 
