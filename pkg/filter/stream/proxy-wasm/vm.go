@@ -3,6 +3,7 @@ package proxywasm
 import (
 	"sync"
 
+	"github.com/bytecodealliance/wasmtime-go"
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
 	"mosn.io/mosn/pkg/log"
 )
@@ -157,5 +158,51 @@ type NilWasmModule struct{}
 
 func (w *NilWasmModule) NewInstance() *wasmContext {
 	log.DefaultLogger.Errorf("NilWasmModule.NewInstance return nil")
-	return nil
+	return &wasmContext{
+		ProxyWasmInstance: &NilWasmInstance{},
+	}
+}
+
+type WasmtimeVM struct {
+	engine *wasmtime.Engine
+	store *wasmtime.Store
+	rootCtx *rootContext
+}
+
+func (w *WasmtimeVM) Init() {
+	w.engine = wasmtime.NewEngine()
+	w.store = wasmtime.NewStore(w.engine)
+	w.rootCtx = &rootContext{
+		propertyMap: make(map[string]string),
+		metrics:     newWasmMetricsManager("wasm"),
+	}
+}
+
+func (w *WasmtimeVM) NewModule(path string) WasmModule {
+	m := &WasmtimeModule{
+		path:   path,
+		vm:     w,
+	}
+	var err error
+	m.module, err = wasmtime.NewModuleFromFile(w.engine, path)
+	if err != nil {
+		log.DefaultLogger.Errorf("WasmtimeVM.NewModule call NewModuleFromFile failed, err: %v", err)
+		return &NilWasmModule{}
+	}
+	return m
+}
+
+type WasmtimeModule struct {
+	path string
+	vm *WasmtimeVM
+	module *wasmtime.Module
+}
+
+func (w *WasmtimeModule) NewInstance() *wasmContext {
+
+	f1 := wasmtime.NewFunc(w.vm.store,
+		wasmtime.NewFuncType([]*wasmtime.ValType{}, []*wasmtime.ValType{}),
+		)
+
+	instance, err := wasmtime.NewInstance(w.vm.store, w.module, imports)
 }
