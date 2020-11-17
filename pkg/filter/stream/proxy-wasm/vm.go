@@ -25,7 +25,6 @@ func init() {
 	vmMap = make(map[string]WasmVM)
 }
 
-
 func NewWasmVM(name string) WasmVM {
 	vmMapSingleton.Lock()
 	defer vmMapSingleton.Unlock()
@@ -50,11 +49,12 @@ type NilVM struct {
 }
 
 func (n *NilVM) Init() {
-	panic("implement me")
+	log.DefaultLogger.Errorf("NilWasmVM.Init")
 }
 
 func (n *NilVM) NewModule(path string) WasmModule {
-	panic("implement me")
+	log.DefaultLogger.Errorf("NilWasmVM.NewModule return nil")
+	return &NilWasmModule{}
 }
 
 type WasmerVM struct {
@@ -156,5 +156,6 @@ func (m *WasmerModule) NewInstance() *wasmContext {
 type NilWasmModule struct{}
 
 func (w *NilWasmModule) NewInstance() *wasmContext {
+	log.DefaultLogger.Errorf("NilWasmModule.NewInstance return nil")
 	return nil
 }

@@ -25,8 +25,7 @@ func (s *StreamProxyWasmConfig) GetData() interface{} {
 }
 
 type FilterConfigFactory struct {
-	//Config *StreamProxyWasmConfig
-	Config *WasmConfigWrapper
+	ConfigName string
 }
 
 func CreateProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilterChainFactory, error) {
@@ -46,7 +45,7 @@ func CreateProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilter
 	rootWasmInstance := configWarpper.wasmModule.NewInstance()
 	if rootWasmInstance == nil {
 		log.DefaultLogger.Errorf("wasm init error")
-		return &FilterConfigFactory{configWarpper}, nil
+		return &FilterConfigFactory{cfg.GetName()}, nil
 	}
 
 	if _, err := rootWasmInstance.proxy_on_vm_start(int32(root_id), 1000); err != nil {
@@ -55,7 +54,7 @@ func CreateProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilter
 
 	log.DefaultLogger.Debugf("wasm init %+v", rootWasmInstance)
 
-	return &FilterConfigFactory{configWarpper}, nil
+	return &FilterConfigFactory{cfg.GetName()}, nil
 }
 
 // ParseStreamPayloadLimitFilter
@@ -72,8 +71,9 @@ func ParseStreamProxyWasmFilter(cfg map[string]interface{}) (*StreamProxyWasmCon
 }
 
 func (f *FilterConfigFactory) CreateFilterChain(context context.Context, callbacks api.StreamFilterChainFactoryCallbacks) {
-
-	filter := NewFilter(context, f.Config)
+	wasmConfigManager := GetWasmConfigManger()
+	config := wasmConfigManager.GetWasmConfigByName(f.ConfigName)
+	filter := NewFilter(context, config)
 	callbacks.AddStreamReceiverFilter(filter, api.BeforeRoute)
 	callbacks.AddStreamSenderFilter(filter)
 
@@ -85,7 +85,7 @@ type streamProxyWasmFilter struct {
 	ctx      context.Context
 	rhandler api.StreamReceiverFilterHandler
 	shandler api.StreamSenderFilterHandler
-	config *WasmConfigWrapper
+	config   *WasmConfigWrapper
 	*wasmContext
 }
 

@@ -1,11 +1,12 @@
 package proxywasm
 
 import (
+	"time"
+
 	wasm "github.com/wasmerio/go-ext-wasm/wasmer"
 	"mosn.io/api"
 	"mosn.io/mosn/pkg/log"
 	"mosn.io/pkg/buffer"
-	"time"
 )
 
 type ProxyWasmContextBase interface {

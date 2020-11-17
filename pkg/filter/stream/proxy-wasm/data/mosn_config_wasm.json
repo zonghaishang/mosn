@@ -48,7 +48,7 @@
                             "config": {
                                 "name": "proxy-wasm",
                                 "runtime": "wasmer",
-                                "path": "./pkg/filter/stream/proxy-wasm/data/envoy_filter_http_wasm_example2.wasm",
+                                "path": "./pkg/filter/stream/proxy-wasm/data/go-test.wasm",
                                 "hello": "world"
                             }
                         }
