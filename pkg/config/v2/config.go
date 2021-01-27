@@ -38,9 +38,10 @@ type MOSNConfig struct {
 	RawStaticResources  json.RawMessage            `json:"static_resources,omitempty"`  //static_resources raw message
 	RawAdmin            json.RawMessage            `json:"admin,omitempty"`             // admin raw message
 	Debug               PProfConfig                `json:"pprof,omitempty"`
-	Pid                 string                     `json:"pid,omitempty"`     // pid file
-	Plugin              PluginConfig               `json:"plugin,omitempty"`  // plugin config
-	Extends             map[string]json.RawMessage `json:"extends,omitempty"` // extend config
+	Pid                 string                     `json:"pid,omitempty"`                 // pid file
+	Plugin              PluginConfig               `json:"plugin,omitempty"`              // plugin config
+	Extends             map[string]json.RawMessage `json:"extends,omitempty"`             // extend config
+	Wasms               []WasmPluginConfig         `json:"wasm_global_plugins,omitempty"` // wasm config
 }
 
 // PProfConfig is used to start a pprof server for debug

@@ -39,6 +39,7 @@ import (
 	"mosn.io/mosn/pkg/trace"
 	"mosn.io/mosn/pkg/types"
 	"mosn.io/mosn/pkg/upstream/cluster"
+	"mosn.io/mosn/pkg/wasm"
 	"mosn.io/mosn/pkg/xds"
 	"mosn.io/pkg/utils"
 )
@@ -48,6 +49,7 @@ type Mosn struct {
 	servers        []server.Server
 	clustermanager types.ClusterManager
 	routerManager  types.RouterManager
+	wasmManager    types.WasmManager
 	config         *v2.MOSNConfig
 	adminServer    admin.Server
 	xdsClient      *xds.Client
@@ -183,6 +185,13 @@ func NewMosn(c *v2.MOSNConfig) *Mosn {
 			}
 		}
 		m.servers = append(m.servers, srv)
+	}
+
+	if c.Wasms != nil {
+		m.wasmManager = wasm.GetWasmManager()
+		for _, config := range c.Wasms {
+			m.wasmManager.AddOrUpdateWasm(config)
+		}
 	}
 
 	return m
