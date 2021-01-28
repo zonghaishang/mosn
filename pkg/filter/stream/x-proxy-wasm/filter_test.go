@@ -19,60 +19,100 @@ package x_proxy_wasm
 
 import (
 	"context"
-	"mosn.io/mosn/pkg/protocol"
-	"mosn.io/mosn/pkg/wasm"
-	"mosn.io/pkg/buffer"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"mosn.io/api"
-	v2 "mosn.io/mosn/pkg/config/v2"
 	"mosn.io/mosn/pkg/mock"
+	_ "mosn.io/mosn/pkg/wasm/runtime/wasmer"
+	"mosn.io/pkg/buffer"
 )
 
-func TestCreateProxyWasmFilterFactory(t *testing.T) {
+func mockHeaderMap(ctrl *gomock.Controller) api.HeaderMap {
+	var m = map[string]string{
+		"requestHeaderKey1": "requestHeaderValue1",
+		"requestHeaderKey2": "requestHeaderValue2",
+		"requestHeaderKey3": "requestHeaderValue3",
+	}
+
+	h := mock.NewMockHeaderMap(ctrl)
+
+	h.EXPECT().Get(gomock.Any()).AnyTimes().DoAndReturn(func(key string) (string, bool) {
+		v, ok := m[key]
+		return v, ok
+	})
+	h.EXPECT().Del(gomock.Any()).AnyTimes().DoAndReturn(func(key string) { delete(m, key) })
+	h.EXPECT().Add(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(func(key string, val string) { m[key] = val })
+	h.EXPECT().Set(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(func(key string, val string) { m[key] = val })
+	h.EXPECT().Range(gomock.Any()).AnyTimes().Do(func(f func(key, value string) bool) {
+		for k, v := range m {
+			if !f(k, v) {
+				break
+			}
+		}
+	})
+	h.EXPECT().ByteSize().AnyTimes().DoAndReturn(func() uint64 {
+		var size uint64
+		for k, v := range m {
+			size += uint64(len(k) + len(v))
+		}
+		return size
+	})
+
+	return h
+}
+
+func TestProxyWasmStreamFilter(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	filterConfigMap := map[string]interface{}{
-		"vm_config": v2.WasmVmConfig{
-			Engine: "wasmer",
+	configMap := map[string]interface{} {
+		"type": "x-proxy-wasm",
+		"config": map[string]interface{} {
+			"instance_num": 1,
+			"vm_config": map[string]interface{}{
+				"engine": "wasmer",
+				"path": "./data/test.wasm",
+				"cpu": 50,
+				"mem": 50,
+			},
+			"root_context_id": 1,
+			"user_config1": "user_value1",
+			"user_config2": "user_value2",
 		},
-		"user_config": "user_value",
 	}
 
-	factory, err := CreateProxyWasmFilterFactory(filterConfigMap)
-	assert.Nil(t, err)
-	assert.NotNil(t, factory)
+	factory, err := createProxyWasmFilterFactory(configMap)
+	if err != nil || factory == nil {
+		t.Errorf("fail to create filter factory")
+		return
+	}
 
-	addReceiverFilterCount := 0
-	addSenderFilterCount := 0
+	var rFilter api.StreamReceiverFilter
+	var sFilter api.StreamSenderFilter
 
 	cb := mock.NewMockStreamFilterChainFactoryCallbacks(ctrl)
-	cb.EXPECT().AddStreamReceiverFilter(gomock.Any(), gomock.Any()).Do(func(api.StreamReceiverFilter, api.ReceiverFilterPhase) {
-		addReceiverFilterCount++
+	cb.EXPECT().AddStreamReceiverFilter(gomock.Any(), gomock.Any()).Do(func(receiverFilter api.StreamReceiverFilter, p api.ReceiverFilterPhase) {
+		assert.Equal(t, p, api.BeforeRoute, "add receiver filter at wrong phase")
+		rFilter = receiverFilter
 	}).AnyTimes()
-	cb.EXPECT().AddStreamSenderFilter(gomock.Any(), gomock.Any()).Do(func(api.StreamSenderFilter, api.SenderFilterPhase) {
-		addSenderFilterCount++
+	cb.EXPECT().AddStreamSenderFilter(gomock.Any(), gomock.Any()).Do(func(senderFilter api.StreamSenderFilter, p api.SenderFilterPhase) {
+		assert.Equal(t, p, api.BeforeSend, "add sender filter at wrong phase")
+		sFilter = senderFilter
 	}).AnyTimes()
 
 	factory.CreateFilterChain(context.TODO(), cb)
-	assert.Equal(t, addReceiverFilterCount, 1)
-	assert.Equal(t, addSenderFilterCount, 1)
-}
 
-func TestOnReciever(t *testing.T) {
-	wasmConfig := v2.WasmPluginConfig{
-		PluginName: "test_plugin",
-		VmConfig: v2.WasmVmConfig{
-			Engine: "wasmer",
-			Path:   "test.wasm",
-		},
-		InstanceNum: 2,
-	}
-	wasm.GetWasmManager().AddOrUpdateWasm(wasmConfig)
+	// for coverage
+	rFilter.SetReceiveFilterHandler(nil)
+	sFilter.SetSenderFilterHandler(nil)
 
-	filter := NewFilter(context.TODO(), "test_plugin", v2.WasmVmConfig{}, pluginConfig{})
-	filter.OnReceive(context.TODO(), protocol.CommonHeader{}, buffer.NewIoBuffer(1), nil)
+	reqHeaderMap := mockHeaderMap(ctrl)
+
+	rFilter.OnReceive(context.TODO(), reqHeaderMap, buffer.NewIoBufferString("request body"), nil)
+	sFilter.Append(context.TODO(), nil, buffer.NewIoBufferString("response body"), nil)
+
+	rFilter.OnDestroy()
+	sFilter.OnDestroy()
 }

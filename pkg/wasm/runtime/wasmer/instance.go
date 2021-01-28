@@ -1,3 +1,20 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package wasmer
 
 import (
@@ -21,6 +38,100 @@ type Instance struct {
 	instance     *wasmerGo.Instance
 	memory       *wasmerGo.Memory
 	funcCache    map[string]*wasmerGo.Function
+}
+
+func newWasmerInstance(vm *VM, module *wasmerGo.Module) *Instance {
+	instance := &Instance{
+		vm:           vm,
+		module:       module,
+		importObject: wasmerGo.NewImportObject(),
+		funcCache:    make(map[string]*wasmerGo.Function),
+	}
+
+	instance.ensureWASIimports()
+
+	return instance
+}
+
+func (w *Instance) RegisterFunc(namespace string, funcName string, f interface{}) {
+	ftype := reflect.TypeOf(f)
+
+	argsNum := ftype.NumIn()
+	argsKind := make([]*wasmerGo.ValueType, argsNum)
+	for i := 0; i < argsNum; i++ {
+		argsKind[i] = convertFromGoType(ftype.In(i))
+	}
+
+	retsNum := ftype.NumOut()
+	retsKind := make([]*wasmerGo.ValueType, retsNum)
+	for i := 0; i < retsNum; i++ {
+		retsKind[i] = convertFromGoType(ftype.Out(i))
+	}
+
+	fwasmer := wasmerGo.NewFunction(
+		w.vm.store,
+		wasmerGo.NewFunctionType(argsKind, retsKind),
+		func(args []wasmerGo.Value) ([]wasmerGo.Value, error) {
+			aa := convertToGoTypes(args)
+
+			callResult := reflect.ValueOf(f).Call(aa)
+
+			ret := convertFromGoValue(callResult[0])
+
+			return []wasmerGo.Value{ret}, nil
+		},
+	)
+
+	w.importObject.Register(namespace, map[string]wasmerGo.IntoExtern{
+		funcName: fwasmer,
+	})
+}
+
+func (w *Instance) ensureWASIimports() {
+	importList := w.module.Imports()
+
+	for _, im := range importList {
+		if im.Type().Kind() == wasmerGo.FUNCTION && im.Module() == "wasi_unstable" {
+
+			fType := im.Type().IntoFunctionType()
+
+			f := wasmerGo.NewFunction(w.vm.store, wasmerGo.NewFunctionType(fType.Params(), fType.Results()),
+				func(values []wasmerGo.Value) ([]wasmerGo.Value, error) {
+					return nil, nil
+				},
+			)
+
+			w.importObject.Register("wasi_unstable", map[string]wasmerGo.IntoExtern{im.Name(): f})
+		}
+	}
+}
+
+func (w *Instance) Start() error {
+	f, err := w.instance.Exports.GetFunction("_start")
+	if err != nil {
+		log.DefaultLogger.Errorf("[wasmer][instance] WasmerInstance fail to get export func: _start, err: %v", err)
+		return err
+	}
+
+	_, err = f()
+	if err != nil {
+		log.DefaultLogger.Errorf("[wasmer][instance] WasmerInstance fail to call _start func, err: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+func (w *Instance) Malloc(size int32) (uint64, error) {
+	malloc, err := w.GetExportsFunc("malloc")
+	if err != nil {
+		return 0, err
+	}
+	addr, err := malloc.Call(size)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(addr.(int32)), nil
 }
 
 func (w *Instance) GetExportsFunc(funcName string) (types.WasmFunction, error) {
@@ -119,99 +230,5 @@ func (w *Instance) PutUint32(addr uint64, value uint32) error {
 		return ErrAddrOverflow
 	}
 	binary.LittleEndian.PutUint32(mem[addr:], value)
-	return nil
-}
-
-func (w *Instance) Malloc(size int32) (uint64, error) {
-	malloc, err := w.GetExportsFunc("malloc")
-	if err != nil {
-		return 0, err
-	}
-	addr, err := malloc.Call(size)
-	if err != nil {
-		return 0, err
-	}
-	return uint64(addr.(int32)), nil
-}
-
-func (w *Instance) RegisterFunc(namespace string, funcName string, f interface{}) {
-	ftype := reflect.TypeOf(f)
-
-	argsNum := ftype.NumIn()
-	argsKind := make([]*wasmerGo.ValueType, argsNum)
-	for i := 0; i < argsNum; i++ {
-		argsKind[i] = convertFromGoType(ftype.In(i))
-	}
-
-	retsNum := ftype.NumOut()
-	retsKind := make([]*wasmerGo.ValueType, retsNum)
-	for i := 0; i < retsNum; i++ {
-		retsKind[i] = convertFromGoType(ftype.Out(i))
-	}
-
-	fwasmer := wasmerGo.NewFunction(
-		w.vm.store,
-		wasmerGo.NewFunctionType(argsKind, retsKind),
-		func(args []wasmerGo.Value) ([]wasmerGo.Value, error) {
-			aa := convertToGoTypes(args)
-
-			callResult := reflect.ValueOf(f).Call(aa)
-
-			ret := convertFromGoValue(callResult[0])
-
-			return []wasmerGo.Value{ret}, nil
-		},
-	)
-
-	w.importObject.Register(namespace, map[string]wasmerGo.IntoExtern{
-		funcName: fwasmer,
-	})
-}
-
-func newWasmerInstance(vm *VM, module *wasmerGo.Module) *Instance {
-	instance := &Instance{
-		vm:           vm,
-		module:       module,
-		importObject: wasmerGo.NewImportObject(),
-		funcCache:    make(map[string]*wasmerGo.Function),
-	}
-
-	instance.ensureWASIimports()
-
-	return instance
-}
-
-func (w *Instance) ensureWASIimports() {
-	importList := w.module.Imports()
-
-	for _, im := range importList {
-		if im.Type().Kind() == wasmerGo.FUNCTION && im.Module() == "wasi_unstable" {
-
-			fType := im.Type().IntoFunctionType()
-
-			f := wasmerGo.NewFunction(w.vm.store, wasmerGo.NewFunctionType(fType.Params(), fType.Results()),
-				func(values []wasmerGo.Value) ([]wasmerGo.Value, error) {
-					return nil, nil
-				},
-			)
-
-			w.importObject.Register("wasi_unstable", map[string]wasmerGo.IntoExtern{im.Name(): f})
-		}
-	}
-}
-
-func (w *Instance) Start() error {
-	f, err := w.instance.Exports.GetFunction("_start")
-	if err != nil {
-		log.DefaultLogger.Errorf("[wasmer][instance] WasmerInstance fail to get export func: _start, err: %v", err)
-		return err
-	}
-
-	_, err = f()
-	if err != nil {
-		log.DefaultLogger.Errorf("[wasmer][instance] WasmerInstance fail to call _start func, err: %v", err)
-		return err
-	}
-
 	return nil
 }

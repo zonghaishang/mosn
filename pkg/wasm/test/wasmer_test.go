@@ -1,6 +1,24 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package test
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -123,7 +141,7 @@ func testCommon(t *testing.T, pluginName string, engine string, path string) {
 	manager := wasm.GetWasmManager()
 	_ = manager.AddOrUpdateWasm(v2.WasmPluginConfig{
 		PluginName: pluginName,
-		VmConfig: v2.WasmVmConfig{
+		VmConfig: &v2.WasmVmConfig{
 			Engine: engine,
 			Path:   path,
 		},
@@ -131,18 +149,32 @@ func testCommon(t *testing.T, pluginName string, engine string, path string) {
 	})
 
 	plugin := manager.GetWasmPluginWrapperByName(pluginName).GetPlugin()
-	v := plugin.GetInstance()
+	instance := plugin.GetInstance()
+	instance.Acquire()
+	defer instance.Release()
 
 	cb := newMockInstanceCallback(ctrl)
 
 	proxyWasm := abi.GetABI("proxy_abi_version_0_1_0")
-	proxyWasm.SetInstance(v)
+	proxyWasm.SetInstance(instance)
 	proxyWasm.SetInstanceCallBack(cb)
 
 	exports := proxyWasm.(proxywasm_0_1_0.Exports)
 
 	rootContextID := 100
 	contextID := 101
+
+	if err := exports.ProxyOnContextCreate(int32(rootContextID), 0); err != nil {
+		t.Errorf("fail to create root context, err: %v", err)
+	}
+
+	if _, err := exports.ProxyOnConfigure(int32(rootContextID), 0); err != nil {
+		t.Errorf("fail to call con config, err: %v", err)
+	}
+
+	if _, err := exports.ProxyOnVmStart(int32(rootContextID), 0); err != nil {
+		t.Errorf("fail to call vm start, err: %v", err)
+	}
 
 	if err := exports.ProxyOnContextCreate(int32(contextID), int32(rootContextID)); err != nil {
 		t.Errorf("fail to call proxyOnContextCreate, err: %v", err)
@@ -174,35 +206,45 @@ func benchCommon(b *testing.B, pluginName string, engine string, path string) {
 	manager := wasm.GetWasmManager()
 	_ = manager.AddOrUpdateWasm(v2.WasmPluginConfig{
 		PluginName: pluginName,
-		VmConfig: v2.WasmVmConfig{
+		VmConfig: &v2.WasmVmConfig{
 			Engine: engine,
 			Path:   path,
 		},
-		InstanceNum: 1,
+		InstanceNum: runtime.NumCPU(),
 	})
 
 	cb := newMockInstanceCallback(ctrl)
 
+	plugin := manager.GetWasmPluginWrapperByName(pluginName).GetPlugin()
+	instance := plugin.GetInstance()
+
+	proxyWasm := abi.GetABI("proxy_abi_version_0_1_0")
+	proxyWasm.SetInstance(instance)
+	proxyWasm.SetInstanceCallBack(cb)
+
+	exports := proxyWasm.(proxywasm_0_1_0.Exports)
+
+	instance.Acquire()
+
+	rootContextID := 100
+	_ = exports.ProxyOnContextCreate(int32(rootContextID), 0)
+	_, _ = exports.ProxyOnConfigure(int32(rootContextID), 0)
+	_, _ = exports.ProxyOnVmStart(int32(rootContextID), 0)
+
+	instance.Release()
+
 	for i := 0; i < b.N; i++ {
-		plugin := manager.GetWasmPluginWrapperByName(pluginName).GetPlugin()
-		v := plugin.GetInstance()
-
-		proxyWasm := abi.GetABI("proxy_abi_version_0_1_0")
-		proxyWasm.SetInstance(v)
-		proxyWasm.SetInstanceCallBack(cb)
-
-		exports := proxyWasm.(proxywasm_0_1_0.Exports)
+		instance.Acquire()
 
 		contextID := 101 + i
-
-		_ = exports.ProxyOnContextCreate(int32(contextID), int32(100))
-
+		_ = exports.ProxyOnContextCreate(int32(contextID), int32(rootContextID))
 		_, _ = exports.ProxyOnRequestHeaders(int32(contextID), 0, 1)
-
 		_, _ = exports.ProxyOnDone(int32(contextID))
 
-		plugin.ReleaseInstance(v)
+		instance.Release()
 	}
+
+	plugin.ReleaseInstance(instance)
 }
 
 func BenchmarkWasmEmptyCall(b *testing.B) {

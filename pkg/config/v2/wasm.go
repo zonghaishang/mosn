@@ -18,13 +18,15 @@
 package v2
 
 type WasmPluginConfig struct {
-	PluginName  string       `json:"plugin_name,omitempty"`
-	VmConfig    WasmVmConfig `json:"vm_config,omitempty"`
-	InstanceNum int          `json:"instance_num,omitempty"`
+	PluginName  string        `json:"plugin_name,omitempty"`
+	VmConfig    *WasmVmConfig `json:"vm_config,omitempty"`
+	InstanceNum int           `json:"instance_num,omitempty"`
 }
 
 type WasmVmConfig struct {
 	Engine string `json:"engine,omitempty"`
 	Path   string `json:"path,omitempty"`
 	Url    string `json:"url,omitempty"`
+	Cpu    int    `json:"cpu,omitempty"`
+	Mem    int    `json:"mem,omitempty"`
 }

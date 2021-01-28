@@ -19,15 +19,17 @@ package wasm
 
 import (
 	"errors"
-	"runtime"
-
+	"io/ioutil"
 	v2 "mosn.io/mosn/pkg/config/v2"
 	"mosn.io/mosn/pkg/log"
 	"mosn.io/mosn/pkg/types"
+	"runtime"
+	"sync/atomic"
 )
 
 var (
-	ErrEngineInit     = errors.New("fail to init wasm engine")
+	ErrEngineNotFound = errors.New("fail to get wasm engine")
+	ErrWasmBytesLoad  = errors.New("fail to load wasm bytes")
 	ErrInstanceCreate = errors.New("fail to create wasm instance")
 	ErrModuleCreate   = errors.New("fail to create wasm module")
 )
@@ -35,88 +37,142 @@ var (
 type wasmPluginImpl struct {
 	config v2.WasmPluginConfig
 
-	instances      chan types.WasmInstance
-	maxInstanceNum int
+	instanceWrappers    []types.WasmInstanceWrapper
+	instanceWrappersIdx int32
+	occupy              int32
+
+	instanceNum int
 
 	vm     types.WasmVM
 	module types.WasmModule
 }
 
 func NewWasmPlugin(wasmConfig v2.WasmPluginConfig) (types.WasmPlugin, error) {
-	maxInstanceNum := wasmConfig.InstanceNum
-	if maxInstanceNum <= 0 {
-		// by default, we create P * 2 wasm instances
-		p := runtime.GOMAXPROCS(0)
-		maxInstanceNum = p * 2
+	instanceNum := wasmConfig.InstanceNum
+	if instanceNum <= 0 {
+		instanceNum = runtime.NumCPU()
 	}
 
 	plugin := &wasmPluginImpl{
-		config:         wasmConfig,
-		maxInstanceNum: maxInstanceNum,
-		instances:      make(chan types.WasmInstance, maxInstanceNum),
+		config:           wasmConfig,
+		instanceNum:      instanceNum,
+		instanceWrappers: make([]types.WasmInstanceWrapper, 0),
 	}
 
-	err := plugin.init()
+	err := plugin.createInstances()
 	if err != nil {
-		log.DefaultLogger.Errorf("[wasm][plugin] NewWasmPlugin init failed, err: %v", err)
+		log.DefaultLogger.Errorf("[wasm][plugin] NewWasmPlugin fail to create instance, err: %v", err)
 		return nil, err
 	}
 
 	return plugin, nil
 }
 
-func (w *wasmPluginImpl) GetConfig() v2.WasmPluginConfig {
+func (w *wasmPluginImpl) PluginName() string {
+	return w.config.PluginName
+}
+
+func (w *wasmPluginImpl) Clear() {
+	// do nothing
+	return
+}
+
+func (w *wasmPluginImpl) Exec(f func(instanceWrapper types.WasmInstanceWrapper) bool) {
+	for _, iw := range w.instanceWrappers {
+		if !f(iw) {
+			break
+		}
+	}
+}
+
+func (w *wasmPluginImpl) GetPluginConfig() v2.WasmPluginConfig {
 	return w.config
 }
 
 func (w *wasmPluginImpl) GetVmConfig() v2.WasmVmConfig {
-	return w.config.VmConfig
+	return *w.config.VmConfig
 }
 
-func (w *wasmPluginImpl) GetInstance() types.WasmInstance {
-	log.DefaultLogger.Debugf("[wasm][plugin] GetInstance got called")
-	return <-w.instances
+func (w *wasmPluginImpl) GetInstance() types.WasmInstanceWrapper {
+	idx := int(w.instanceWrappersIdx) % len(w.instanceWrappers)
+
+	iw := w.instanceWrappers[idx]
+
+	w.instanceWrappersIdx++
+	atomic.AddInt32(&w.occupy, 1)
+
+	return iw
 }
 
-func (w *wasmPluginImpl) ReleaseInstance(instance types.WasmInstance) {
-	log.DefaultLogger.Debugf("[wasm][plugin] ReleaseInstance got called")
-	w.instances <- instance
+func (w *wasmPluginImpl) ReleaseInstance(instanceWrapper types.WasmInstanceWrapper) {
+	atomic.AddInt32(&w.occupy, -1)
 }
 
-func (w *wasmPluginImpl) init() error {
+func (w *wasmPluginImpl) loadWasmBytesFromPath(path string) []byte {
+	if path == "" {
+		return nil
+	}
+
+	bytes, err := ioutil.ReadFile(path)
+	if err != nil {
+		log.DefaultLogger.Errorf("[wasm][plugin] loadWasmBytesFromPath read file err: %v", err)
+		return nil
+	}
+
+	return bytes
+}
+
+func (w *wasmPluginImpl) loadWasmBytesFromUrl(url string) []byte {
+	if url == "" {
+		return nil
+	}
+
+	return nil
+}
+
+func (w *wasmPluginImpl) createInstances() error {
+	// get wasm engine
 	w.vm = GetWasmEngine(w.config.VmConfig.Engine)
 	if w.vm == nil {
-		log.DefaultLogger.Errorf("[wasm][plugin] init fail to create vm, engine: %v", w.config.VmConfig.Engine)
-		return ErrEngineInit
+		log.DefaultLogger.Errorf("[wasm][plugin] init fail to get wasm engine: %v", w.config.VmConfig.Engine)
+		return ErrEngineNotFound
 	}
 
-	var path string
-	if w.config.VmConfig.Url != "" {
-		// TODO: load wasm file from URL
-		path = ""
+	// load wasm bytes
+	var wasmBytes []byte
+	if w.config.VmConfig.Path != "" {
+		wasmBytes = w.loadWasmBytesFromPath(w.config.VmConfig.Path)
 	} else {
-		path = w.config.VmConfig.Path
+		wasmBytes = w.loadWasmBytesFromUrl(w.config.VmConfig.Url)
 	}
 
-	w.module = w.vm.NewModule(path)
+	if wasmBytes == nil || len(wasmBytes) == 0 {
+		log.DefaultLogger.Errorf("[wasm][plugin] createInstances fail to load wasm bytes, config: %v", w.config)
+		return ErrWasmBytesLoad
+	}
+
+	// create wasm module
+	w.module = w.vm.NewModule(wasmBytes)
 	if w.module == nil {
-		log.DefaultLogger.Errorf("[wasm][plugin] init fail to create module, engine: %v, path: %v", w.config.VmConfig.Engine, path)
+		log.DefaultLogger.Errorf("[wasm][plugin] createInstances fail to create module, config: %v", w.config)
 		return ErrModuleCreate
 	}
 
 	// create wasm instance
-	for i := 0; i < w.maxInstanceNum; i++ {
+	instanceCreated := 0
+	for i := 0; i < w.instanceNum; i++ {
 		instance := w.module.NewInstance()
 		if instance == nil {
-			log.DefaultLogger.Errorf("[wasm][plugin] init fail to create instance")
-			break
+			log.DefaultLogger.Errorf("[wasm][plugin] createInstances fail to create instance, i: %v", i)
+			continue
 		}
 
-		w.instances <- instance
+		w.instanceWrappers = append(w.instanceWrappers, &wasmInstanceWrapperImpl{WasmInstance: instance})
+		instanceCreated++
 	}
 
-	if len(w.instances) == 0 {
-		log.DefaultLogger.Errorf("[wasm][plugin] init fail to create wasm instance, engine: %v, path: %v", w.config.VmConfig.Engine, path)
+	if instanceCreated == 0 {
+		log.DefaultLogger.Errorf("[wasm][plugin] createInstances create 0 instance")
 		return ErrInstanceCreate
 	}
 

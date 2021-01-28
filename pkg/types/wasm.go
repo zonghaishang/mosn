@@ -23,26 +23,41 @@ import (
 
 type WasmManager interface {
 	AddOrUpdateWasm(wasmConfig v2.WasmPluginConfig) error
-	GetWasmPluginWrapperByName(wasmPluginName string) WasmPluginWrapper
-	UninstallWasmPluginByName(wasmPluginName string) error
+	GetWasmPluginWrapperByName(pluginName string) WasmPluginWrapper
+	UninstallWasmPluginByName(pluginName string) error
 }
 
 type WasmPluginWrapper interface {
 	GetPlugin() WasmPlugin
 	GetConfig() v2.WasmPluginConfig
+
+	Update(plugin WasmPlugin, config v2.WasmPluginConfig)
 }
 
 type WasmPlugin interface {
-	GetConfig() v2.WasmPluginConfig
+	PluginName() string
+
+	GetPluginConfig() v2.WasmPluginConfig
 	GetVmConfig() v2.WasmVmConfig
 
-	GetInstance() WasmInstance
-	ReleaseInstance(instance WasmInstance)
+	GetInstance() WasmInstanceWrapper
+	ReleaseInstance(instanceWrapper WasmInstanceWrapper)
+
+	Exec(func(instanceWrapper WasmInstanceWrapper)bool)
+
+	Clear()
+}
+
+type WasmInstanceWrapper interface {
+	Acquire()
+	Release()
+
+	WasmInstance
 }
 
 type WasmVM interface {
 	Init()
-	NewModule(path string) WasmModule
+	NewModule(wasmBytes []byte) WasmModule
 }
 
 type WasmModule interface {
