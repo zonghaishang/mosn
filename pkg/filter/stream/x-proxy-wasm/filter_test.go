@@ -115,5 +115,4 @@ func TestProxyWasmStreamFilter(t *testing.T) {
 
 	rFilter.OnDestroy()
 	sFilter.OnDestroy()
-
 }

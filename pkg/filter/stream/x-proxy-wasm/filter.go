@@ -47,12 +47,12 @@ type Filter struct {
 	receiverFilterHandler api.StreamReceiverFilterHandler
 	senderFilterHandler   api.StreamSenderFilterHandler
 
-	reqHeader api.HeaderMap
-	reqBody buffer.IoBuffer
+	reqHeader  api.HeaderMap
+	reqBody    buffer.IoBuffer
 	reqTrailer api.HeaderMap
 
-	respHeader api.HeaderMap
-	respBody buffer.IoBuffer
+	respHeader  api.HeaderMap
+	respBody    buffer.IoBuffer
 	respTrailer api.HeaderMap
 
 	destroyOnce sync.Once

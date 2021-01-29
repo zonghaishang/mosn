@@ -19,6 +19,7 @@ package wasm
 
 import (
 	"errors"
+	"reflect"
 	"sync"
 
 	"mosn.io/mosn/pkg/config/v2"
@@ -39,9 +40,23 @@ func GetWasmManager() types.WasmManager {
 }
 
 type pluginWrapper struct {
-	mu     sync.RWMutex
-	plugin types.WasmPlugin
-	config v2.WasmPluginConfig
+	mu             sync.RWMutex
+	plugin         types.WasmPlugin
+	config         v2.WasmPluginConfig
+	pluginHandlers []types.WasmPluginHandler
+}
+
+func (w *pluginWrapper) RegisterPluginHandler(pluginHandler types.WasmPluginHandler) {
+	if pluginHandler == nil {
+		return
+	}
+
+	w.mu.Lock()
+	w.pluginHandlers = append(w.pluginHandlers, pluginHandler)
+	w.mu.Unlock()
+
+	pluginHandler.OnConfigUpdate(w.config)
+	pluginHandler.OnPluginStart(w.plugin)
 }
 
 func (w *pluginWrapper) GetPlugin() types.WasmPlugin {
@@ -58,24 +73,96 @@ func (w *pluginWrapper) GetConfig() v2.WasmPluginConfig {
 	return w.config
 }
 
-func (w *pluginWrapper) Update(plugin types.WasmPlugin, config v2.WasmPluginConfig) {
-	if plugin == nil || config.PluginName == "" || config.PluginName != w.config.PluginName {
+func (w *pluginWrapper) Update(config v2.WasmPluginConfig, plugin types.WasmPlugin) {
+	if config.PluginName == "" || config.PluginName != w.GetConfig().PluginName {
 		return
 	}
 
+	// update config
+	for _, handler := range w.pluginHandlers {
+		handler.OnConfigUpdate(config)
+	}
+
 	w.mu.Lock()
-	oldPlugin := w.plugin
-
-	w.plugin = plugin
 	w.config = config
-
 	w.mu.Unlock()
 
+	// update plugin
+	if plugin == nil {
+		return
+	}
+
+	// check same plugin
+	oldPlugin := w.GetPlugin()
+	if plugin == oldPlugin {
+		return
+	}
+
+	// do update plugin
+	for _, handler := range w.pluginHandlers {
+		handler.OnPluginStart(plugin)
+	}
+
+	w.mu.Lock()
+	w.plugin = plugin
+	w.mu.Unlock()
+
+	for _, handler := range w.pluginHandlers {
+		handler.OnPluginDestroy(oldPlugin)
+	}
 	oldPlugin.Clear()
 }
 
 type wasmMangerImpl struct {
 	pluginMap sync.Map
+}
+
+func (w *wasmMangerImpl) shouldCreateNewPlugin(newConfig v2.WasmPluginConfig, oldConfig v2.WasmPluginConfig) bool {
+	if newConfig.VmConfig == nil || oldConfig.VmConfig == nil {
+		return false
+	}
+
+	if newConfig.VmConfig.Engine != oldConfig.VmConfig.Engine ||
+		newConfig.VmConfig.Path != oldConfig.VmConfig.Path ||
+		newConfig.VmConfig.Url != oldConfig.VmConfig.Url {
+		return true
+	}
+
+	// TODO: check whether wasm file update without changing its name
+
+	return false
+}
+
+func (w *wasmMangerImpl) updateWasm(pluginWrapper types.WasmPluginWrapper, newConfig v2.WasmPluginConfig) {
+	oldConfig := pluginWrapper.GetConfig()
+	if reflect.DeepEqual(newConfig, oldConfig) {
+		log.DefaultLogger.Infof("[wasm][manager] AddOrUpdateWasm do not update for same config: %v", newConfig)
+		return
+	}
+
+	plugin := pluginWrapper.GetPlugin()
+
+	if w.shouldCreateNewPlugin(newConfig, pluginWrapper.GetConfig()) {
+		var err error
+		plugin, err = NewWasmPlugin(newConfig)
+		if err != nil {
+			log.DefaultLogger.Errorf("[wasm][manager] updateWasm fail to create wasm plugin: %v, err: %v", newConfig.PluginName, err)
+			return
+		}
+	} else {
+		actualNum := plugin.EnsureInstanceNum(newConfig.InstanceNum)
+		if actualNum == 0 {
+			log.DefaultLogger.Errorf("[wasm][manager] updateWasm fail to update wasm instance num, want num: %v, actual num: %v", newConfig.InstanceNum, actualNum)
+			return
+		}
+	}
+
+	plugin.SetCpuLimit(newConfig.VmConfig.Cpu)
+	plugin.SetMemLimit(newConfig.VmConfig.Mem)
+
+	pluginWrapper.Update(newConfig, plugin)
+
+	log.DefaultLogger.Infof("[wasm][manager] AddOrUpdateWasm update wasm plugin: %v, config: %v", newConfig.PluginName, newConfig)
 }
 
 func (w *wasmMangerImpl) AddOrUpdateWasm(config v2.WasmPluginConfig) error {
@@ -91,15 +178,7 @@ func (w *wasmMangerImpl) AddOrUpdateWasm(config v2.WasmPluginConfig) error {
 			return ErrUnexpectedType
 		}
 
-		plugin, err := NewWasmPlugin(config)
-		if err != nil {
-			log.DefaultLogger.Errorf("[wasm][manager] AddOrUpdateWasm fail to create wasm plugin: %v, err: %v", config.PluginName, err)
-			return err
-		}
-
-		pluginWrapper.Update(plugin, config)
-
-		log.DefaultLogger.Infof("[wasm][manager] AddOrUpdateWasm update wasm plugin: %v", config.PluginName)
+		w.updateWasm(pluginWrapper, config)
 	} else {
 		// add new wasm plugin
 		plugin, err := NewWasmPlugin(config)

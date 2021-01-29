@@ -20,7 +20,7 @@ package proxywasm_0_1_0
 import "mosn.io/mosn/pkg/log"
 
 func (a *abiImpl) ProxyOnContextCreate(contextId int32, parentContextId int32) error {
-	log.DefaultLogger.Debugf("[wasmer][instance] ProxyOnContextCreate")
+	log.DefaultLogger.Infof("[proxywasm_0_1_0][export] ProxyOnContextCreate contextID: %v, parentContextId: %v", contextId, parentContextId)
 
 	ff, err := a.instance.GetExportsFunc("proxy_on_context_create")
 	if err != nil {
@@ -35,7 +35,7 @@ func (a *abiImpl) ProxyOnContextCreate(contextId int32, parentContextId int32) e
 	return nil
 }
 func (a *abiImpl) ProxyOnDone(contextId int32) (int32, error) {
-	log.DefaultLogger.Debugf("[wasmer][instance] ProxyOnDone")
+	log.DefaultLogger.Infof("[proxywasm_0_1_0][export] ProxyOnDone contextID: %v", contextId)
 
 	ff, err := a.instance.GetExportsFunc("proxy_on_done")
 	if err != nil {
@@ -66,7 +66,7 @@ func (a *abiImpl) ProxyOnLog(contextId int32) error {
 }
 
 func (a *abiImpl) ProxyOnVmStart(rootContextId int32, vmConfigurationSize int32) (int32, error) {
-	log.DefaultLogger.Debugf("[wasmer][instance] ProxyOnVmStart")
+	log.DefaultLogger.Infof("[proxywasm_0_1_0][export] ProxyOnVmStart rootContextId: %v, vmConfigurationSize: %v", rootContextId, vmConfigurationSize)
 
 	ff, err := a.instance.GetExportsFunc("proxy_on_vm_start")
 	if err != nil {
@@ -96,7 +96,7 @@ func (a *abiImpl) ProxyOnDelete(contextId int32) error {
 }
 
 func (a *abiImpl) ProxyOnConfigure(rootContextId int32, configurationSize int32) (int32, error) {
-	log.DefaultLogger.Debugf("[proxywasm_0_1_0][export] WasmerInstance ProxyOnConfigure")
+	log.DefaultLogger.Infof("[proxywasm_0_1_0][export] ProxyOnConfigure rootContextId: %v, configurationSize: %v", rootContextId, configurationSize)
 
 	ff, err := a.instance.GetExportsFunc("proxy_on_configure")
 	if err != nil {

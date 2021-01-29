@@ -31,21 +31,44 @@ type WasmPluginWrapper interface {
 	GetPlugin() WasmPlugin
 	GetConfig() v2.WasmPluginConfig
 
-	Update(plugin WasmPlugin, config v2.WasmPluginConfig)
+	RegisterPluginHandler(pluginHandler WasmPluginHandler)
+
+	Update(config v2.WasmPluginConfig, plugin WasmPlugin)
+}
+
+type WasmPluginHandler interface {
+	OnConfigUpdate(config v2.WasmPluginConfig)
+	OnPluginStart(plugin WasmPlugin)
+	OnPluginDestroy(plugin WasmPlugin)
 }
 
 type WasmPlugin interface {
+	// PluginName return the name of plugin
 	PluginName() string
 
 	GetPluginConfig() v2.WasmPluginConfig
 	GetVmConfig() v2.WasmVmConfig
 
+	// EnsureInstanceNum try to expand/shrink the num of instance to 'num'
+	// and return the actual instance num
+	EnsureInstanceNum(num int) int
+
+	// InstanceNum return the current number of instance
+	InstanceNum() int
+
 	GetInstance() WasmInstanceWrapper
 	ReleaseInstance(instanceWrapper WasmInstanceWrapper)
 
-	Exec(func(instanceWrapper WasmInstanceWrapper)bool)
+	// Exec execute the f for each instance
+	Exec(f func(instanceWrapper WasmInstanceWrapper)bool)
 
 	Clear()
+
+	// SetCpuLimit set cpu limit of the plugin, not supported currently
+	SetCpuLimit(cpu int)
+
+	// SetCpuLimit set cpu limit of the plugin, not supported currently
+	SetMemLimit(mem int)
 }
 
 type WasmInstanceWrapper interface {

@@ -73,12 +73,6 @@ func createProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilter
 		pluginName = config.FromWasmPlugin
 	}
 
-	abiVersion := abi.GetABI("proxy_abi_version_0_1_0")
-	if abiVersion == nil {
-		log.DefaultLogger.Errorf("[x-proxy-wasm][filter] NewFilter abi version not found")
-		return nil, errors.New("abi proxy_abi_version_0_1_0 not found")
-	}
-
 	pw := wasm.GetWasmManager().GetWasmPluginWrapperByName(pluginName)
 	if pw == nil {
 		return nil, errors.New("plugin not found")
@@ -93,21 +87,7 @@ func createProxyWasmFilterFactory(conf map[string]interface{}) (api.StreamFilter
 		config:     config,
 	}
 
-	pw.GetPlugin().Exec(func(instanceWrapper types.WasmInstanceWrapper) bool {
-		instanceWrapper.Acquire()
-		defer instanceWrapper.Release()
-
-		abiVersion.SetInstance(instanceWrapper)
-		abiVersion.SetInstanceCallBack(factory)
-
-		exports := abiVersion.(proxywasm_0_1_0.Exports)
-
-		_ = exports.ProxyOnContextCreate(config.RootContextID, 0)
-		_, _ = exports.ProxyOnConfigure(config.RootContextID, int32(configSize(config.pluginConfig)))
-		_, _ = exports.ProxyOnVmStart(config.RootContextID, int32(configSize(config.VmConfig)))
-
-		return true
-	})
+	pw.RegisterPluginHandler(factory)
 
 	return factory, nil
 }
@@ -143,3 +123,35 @@ func (f *FilterConfigFactory) GetPluginConfig() buffer.IoBuffer {
 	return buffer.NewIoBufferBytes(b)
 }
 
+func (f *FilterConfigFactory) OnConfigUpdate(config v2.WasmPluginConfig) {
+	f.config.InstanceNum = config.InstanceNum
+	f.config.VmConfig = config.VmConfig
+}
+
+func (f *FilterConfigFactory) OnPluginStart(plugin types.WasmPlugin) {
+	abiVersion := abi.GetABI("proxy_abi_version_0_1_0")
+	if abiVersion == nil {
+		log.DefaultLogger.Errorf("[x-proxy-wasm][filter] NewFilter abi version not found")
+		return
+	}
+
+	plugin.Exec(func(instanceWrapper types.WasmInstanceWrapper) bool {
+		instanceWrapper.Acquire()
+		defer instanceWrapper.Release()
+
+		abiVersion.SetInstance(instanceWrapper)
+		abiVersion.SetInstanceCallBack(f)
+
+		exports := abiVersion.(proxywasm_0_1_0.Exports)
+
+		_ = exports.ProxyOnContextCreate(f.config.RootContextID, 0)
+		_, _ = exports.ProxyOnConfigure(f.config.RootContextID, int32(configSize(f.config.pluginConfig)))
+		_, _ = exports.ProxyOnVmStart(f.config.RootContextID, int32(configSize(f.config.VmConfig)))
+
+		return true
+	})
+}
+
+func (f *FilterConfigFactory) OnPluginDestroy(plugin types.WasmPlugin) {
+	return
+}

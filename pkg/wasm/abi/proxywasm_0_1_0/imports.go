@@ -46,11 +46,11 @@ func (a *abiImpl) proxyGetBufferBytes(bufferType int32, start int32, length int3
 		return WasmResultNotFound.Int32()
 	}
 
-	if  start > start+length {
+	if start > start+length {
 		return WasmResultBadArgument.Int32()
 	}
 
-	if start + length > int32(buf.Len()) {
+	if start+length > int32(buf.Len()) {
 		length = int32(buf.Len()) - start
 	}
 
@@ -85,7 +85,7 @@ func (a *abiImpl) proxySetBufferBytes(bufferType int32, start int32, length int3
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
 
-	if start + length > int32(buf.Len()) {
+	if start+length > int32(buf.Len()) {
 		length = int32(buf.Len()) - start
 	}
 
@@ -136,7 +136,7 @@ func (a *abiImpl) proxyGetHeaderMapPairs(mapType int32, returnDataPtr int32, ret
 	totalBytesLen := 4
 	header.Range(func(key, value string) bool {
 		cloneMap[key] = value
-		totalBytesLen += 4 + 4 // keyLen + valueLen
+		totalBytesLen += 4 + 4                         // keyLen + valueLen
 		totalBytesLen += len(key) + 1 + len(value) + 1 // key + \0 + value + \0
 		return true
 	})
@@ -150,7 +150,7 @@ func (a *abiImpl) proxyGetHeaderMapPairs(mapType int32, returnDataPtr int32, ret
 	err = a.instance.PutUint32(addr, uint32(len(cloneMap)))
 
 	lenPtr := addr + 4
-	dataPtr := lenPtr + uint64(8 * len(cloneMap))
+	dataPtr := lenPtr + uint64(8*len(cloneMap))
 	for k, v := range cloneMap {
 		err = a.instance.PutUint32(lenPtr, uint32(len(k)))
 		lenPtr += 4
