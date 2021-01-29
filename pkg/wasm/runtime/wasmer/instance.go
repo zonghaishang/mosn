@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"reflect"
+	"sync"
 
 	wasmerGo "github.com/wasmerio/wasmer-go/wasmer"
 	"mosn.io/mosn/pkg/log"
@@ -37,7 +38,7 @@ type Instance struct {
 	importObject *wasmerGo.ImportObject
 	instance     *wasmerGo.Instance
 	memory       *wasmerGo.Memory
-	funcCache    map[string]*wasmerGo.Function
+	funcCache    sync.Map // string -> *wasmerGo.Function
 }
 
 func newWasmerInstance(vm *VM, module *wasmerGo.Module) *Instance {
@@ -45,7 +46,6 @@ func newWasmerInstance(vm *VM, module *wasmerGo.Module) *Instance {
 		vm:           vm,
 		module:       module,
 		importObject: wasmerGo.NewImportObject(),
-		funcCache:    make(map[string]*wasmerGo.Function),
 	}
 
 	instance.ensureWASIimports()
@@ -135,8 +135,8 @@ func (w *Instance) Malloc(size int32) (uint64, error) {
 }
 
 func (w *Instance) GetExportsFunc(funcName string) (types.WasmFunction, error) {
-	if f, ok := w.funcCache[funcName]; ok {
-		return f, nil
+	if v, ok := w.funcCache.Load(funcName); ok {
+		return v.(*wasmerGo.Function), nil
 	}
 
 	f, err := w.instance.Exports.GetRawFunction(funcName)
@@ -144,7 +144,7 @@ func (w *Instance) GetExportsFunc(funcName string) (types.WasmFunction, error) {
 		return nil, err
 	}
 
-	w.funcCache[funcName] = f
+	w.funcCache.Store(funcName, f)
 
 	return f, nil
 }

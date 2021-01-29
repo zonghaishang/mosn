@@ -67,19 +67,19 @@ func TestProxyWasmStreamFilter(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	configMap := map[string]interface{} {
+	configMap := map[string]interface{}{
 		"type": "x-proxy-wasm",
-		"config": map[string]interface{} {
+		"config": map[string]interface{}{
 			"instance_num": 1,
 			"vm_config": map[string]interface{}{
 				"engine": "wasmer",
-				"path": "./data/test.wasm",
-				"cpu": 50,
-				"mem": 50,
+				"path":   "./data/test.wasm",
+				"cpu":    50,
+				"mem":    50,
 			},
 			"root_context_id": 1,
-			"user_config1": "user_value1",
-			"user_config2": "user_value2",
+			"user_config1":    "user_value1",
+			"user_config2":    "user_value2",
 		},
 	}
 
@@ -115,4 +115,5 @@ func TestProxyWasmStreamFilter(t *testing.T) {
 
 	rFilter.OnDestroy()
 	sFilter.OnDestroy()
+
 }

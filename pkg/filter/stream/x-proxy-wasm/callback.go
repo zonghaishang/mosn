@@ -67,25 +67,25 @@ func (p *proxyWasmInstanceCallback) Log(level log.Level, msg string) {
 }
 
 func (p *proxyWasmInstanceCallback) GetHttpRequestHeader() api.HeaderMap {
-	return p.filter.receiverFilterHandler.GetRequestHeaders()
+	return p.filter.reqHeader
 }
 
 func (p *proxyWasmInstanceCallback) GetHttpRequestBody() buffer.IoBuffer {
-	return p.filter.receiverFilterHandler.GetRequestData()
+	return p.filter.reqBody
 }
 
 func (p *proxyWasmInstanceCallback) GetHttpRequestTrailer() api.HeaderMap {
-	return p.filter.receiverFilterHandler.GetRequestTrailers()
+	return p.filter.reqTrailer
 }
 
 func (p *proxyWasmInstanceCallback) GetHttpResponseHeader() api.HeaderMap {
-	return p.filter.senderFilterHandler.GetResponseHeaders()
+	return p.filter.respHeader
 }
 
 func (p *proxyWasmInstanceCallback) GetHttpResponseBody() buffer.IoBuffer {
-	return p.filter.senderFilterHandler.GetResponseData()
+	return p.filter.respBody
 }
 
 func (p *proxyWasmInstanceCallback) GetHttpResponseTrailer() api.HeaderMap {
-	return p.filter.senderFilterHandler.GetResponseTrailers()
+	return p.filter.respTrailer
 }

@@ -47,6 +47,14 @@ type Filter struct {
 	receiverFilterHandler api.StreamReceiverFilterHandler
 	senderFilterHandler   api.StreamSenderFilterHandler
 
+	reqHeader api.HeaderMap
+	reqBody buffer.IoBuffer
+	reqTrailer api.HeaderMap
+
+	respHeader api.HeaderMap
+	respBody buffer.IoBuffer
+	respTrailer api.HeaderMap
+
 	destroyOnce sync.Once
 }
 
@@ -109,6 +117,10 @@ func (f *Filter) SetSenderFilterHandler(handler api.StreamSenderFilterHandler) {
 }
 
 func (f *Filter) OnReceive(ctx context.Context, headers api.HeaderMap, buf buffer.IoBuffer, trailers api.HeaderMap) api.StreamFilterStatus {
+	f.reqHeader = headers
+	f.reqBody = buf
+	f.reqTrailer = trailers
+
 	f.instance.Acquire()
 	defer f.instance.Release()
 
@@ -130,6 +142,10 @@ func (f *Filter) OnReceive(ctx context.Context, headers api.HeaderMap, buf buffe
 }
 
 func (f *Filter) Append(ctx context.Context, headers api.HeaderMap, buf buffer.IoBuffer, trailers api.HeaderMap) api.StreamFilterStatus {
+	f.respHeader = headers
+	f.respBody = buf
+	f.respTrailer = trailers
+
 	f.instance.Acquire()
 	defer f.instance.Release()
 
