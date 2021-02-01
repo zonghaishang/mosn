@@ -18,19 +18,23 @@
 package wasm
 
 import (
-	"mosn.io/mosn/pkg/types"
 	"sync"
+
+	"mosn.io/mosn/pkg/types"
 )
 
+// implement types.WasmInstanceWrapper
 type wasmInstanceWrapperImpl struct {
 	lock sync.Mutex
 	types.WasmInstance
 }
 
-func (w *wasmInstanceWrapperImpl) Acquire() {
+func (w *wasmInstanceWrapperImpl) Acquire(data interface{}) {
 	w.lock.Lock()
+	w.SetData(data)
 }
 
 func (w *wasmInstanceWrapperImpl) Release() {
+	w.SetData(nil)
 	w.lock.Unlock()
 }

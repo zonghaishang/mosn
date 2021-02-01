@@ -19,6 +19,7 @@ package x_proxy_wasm
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -70,7 +71,7 @@ func TestProxyWasmStreamFilter(t *testing.T) {
 	configMap := map[string]interface{}{
 		"type": "x-proxy-wasm",
 		"config": map[string]interface{}{
-			"instance_num": 1,
+			"instance_num": 4,
 			"vm_config": map[string]interface{}{
 				"engine": "wasmer",
 				"path":   "./data/test.wasm",
@@ -89,30 +90,41 @@ func TestProxyWasmStreamFilter(t *testing.T) {
 		return
 	}
 
-	var rFilter api.StreamReceiverFilter
-	var sFilter api.StreamSenderFilter
+	wg := sync.WaitGroup{}
 
-	cb := mock.NewMockStreamFilterChainFactoryCallbacks(ctrl)
-	cb.EXPECT().AddStreamReceiverFilter(gomock.Any(), gomock.Any()).Do(func(receiverFilter api.StreamReceiverFilter, p api.ReceiverFilterPhase) {
-		assert.Equal(t, p, api.BeforeRoute, "add receiver filter at wrong phase")
-		rFilter = receiverFilter
-	}).AnyTimes()
-	cb.EXPECT().AddStreamSenderFilter(gomock.Any(), gomock.Any()).Do(func(senderFilter api.StreamSenderFilter, p api.SenderFilterPhase) {
-		assert.Equal(t, p, api.BeforeSend, "add sender filter at wrong phase")
-		sFilter = senderFilter
-	}).AnyTimes()
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-	factory.CreateFilterChain(context.TODO(), cb)
+			var rFilter api.StreamReceiverFilter
+			var sFilter api.StreamSenderFilter
 
-	// for coverage
-	rFilter.SetReceiveFilterHandler(nil)
-	sFilter.SetSenderFilterHandler(nil)
+			cb := mock.NewMockStreamFilterChainFactoryCallbacks(ctrl)
+			cb.EXPECT().AddStreamReceiverFilter(gomock.Any(), gomock.Any()).Do(func(receiverFilter api.StreamReceiverFilter, p api.ReceiverFilterPhase) {
+				assert.Equal(t, p, api.BeforeRoute, "add receiver filter at wrong phase")
+				rFilter = receiverFilter
+			}).AnyTimes()
+			cb.EXPECT().AddStreamSenderFilter(gomock.Any(), gomock.Any()).Do(func(senderFilter api.StreamSenderFilter, p api.SenderFilterPhase) {
+				assert.Equal(t, p, api.BeforeSend, "add sender filter at wrong phase")
+				sFilter = senderFilter
+			}).AnyTimes()
 
-	reqHeaderMap := mockHeaderMap(ctrl)
+			factory.CreateFilterChain(context.TODO(), cb)
 
-	rFilter.OnReceive(context.TODO(), reqHeaderMap, buffer.NewIoBufferString("request body"), nil)
-	sFilter.Append(context.TODO(), nil, buffer.NewIoBufferString("response body"), nil)
+			// for coverage
+			rFilter.SetReceiveFilterHandler(nil)
+			sFilter.SetSenderFilterHandler(nil)
 
-	rFilter.OnDestroy()
-	sFilter.OnDestroy()
+			reqHeaderMap := mockHeaderMap(ctrl)
+
+			rFilter.OnReceive(context.TODO(), reqHeaderMap, buffer.NewIoBufferString("request body"), nil)
+			sFilter.Append(context.TODO(), nil, buffer.NewIoBufferString("response body"), nil)
+
+			rFilter.OnDestroy()
+			sFilter.OnDestroy()
+		}()
+	}
+
+	wg.Wait()
 }

@@ -28,96 +28,26 @@ import (
 )
 
 var (
-	ErrEmptyPluginName = errors.New("wasm config without plugin name")
-	ErrUnexpectedType  = errors.New("unexpected object type in map")
-	ErrPluginNotFound  = errors.New("wasm plugin not found")
+	ErrEmptyPluginName   = errors.New("wasm config without plugin name")
+	ErrUnexpectedType    = errors.New("unexpected object type in map")
+	ErrPluginNotFound    = errors.New("wasm plugin not found")
+	ErrSameWasmConfig    = errors.New("update with same wasm config")
+	ErrUpdateInstanceNum = errors.New("update instance num return 0")
 )
 
-var wasmManagerInstance types.WasmManager = &wasmMangerImpl{}
-
+// GetWasmManager returns the global singleton of types.WasmManager
 func GetWasmManager() types.WasmManager {
 	return wasmManagerInstance
 }
 
-type pluginWrapper struct {
-	mu             sync.RWMutex
-	plugin         types.WasmPlugin
-	config         v2.WasmPluginConfig
-	pluginHandlers []types.WasmPluginHandler
-}
+var wasmManagerInstance types.WasmManager = &wasmManagerImpl{}
 
-func (w *pluginWrapper) RegisterPluginHandler(pluginHandler types.WasmPluginHandler) {
-	if pluginHandler == nil {
-		return
-	}
-
-	w.mu.Lock()
-	w.pluginHandlers = append(w.pluginHandlers, pluginHandler)
-	w.mu.Unlock()
-
-	pluginHandler.OnConfigUpdate(w.config)
-	pluginHandler.OnPluginStart(w.plugin)
-}
-
-func (w *pluginWrapper) GetPlugin() types.WasmPlugin {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
-	return w.plugin
-}
-
-func (w *pluginWrapper) GetConfig() v2.WasmPluginConfig {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
-	return w.config
-}
-
-func (w *pluginWrapper) Update(config v2.WasmPluginConfig, plugin types.WasmPlugin) {
-	if config.PluginName == "" || config.PluginName != w.GetConfig().PluginName {
-		return
-	}
-
-	// update config
-	for _, handler := range w.pluginHandlers {
-		handler.OnConfigUpdate(config)
-	}
-
-	w.mu.Lock()
-	w.config = config
-	w.mu.Unlock()
-
-	// update plugin
-	if plugin == nil {
-		return
-	}
-
-	// check same plugin
-	oldPlugin := w.GetPlugin()
-	if plugin == oldPlugin {
-		return
-	}
-
-	// do update plugin
-	for _, handler := range w.pluginHandlers {
-		handler.OnPluginStart(plugin)
-	}
-
-	w.mu.Lock()
-	w.plugin = plugin
-	w.mu.Unlock()
-
-	for _, handler := range w.pluginHandlers {
-		handler.OnPluginDestroy(oldPlugin)
-	}
-	oldPlugin.Clear()
-}
-
-type wasmMangerImpl struct {
+// implementation of types.WasmManager
+type wasmManagerImpl struct {
 	pluginMap sync.Map
 }
 
-func (w *wasmMangerImpl) shouldCreateNewPlugin(newConfig v2.WasmPluginConfig, oldConfig v2.WasmPluginConfig) bool {
+func (w *wasmManagerImpl) shouldCreateNewPlugin(newConfig v2.WasmPluginConfig, oldConfig v2.WasmPluginConfig) bool {
 	if newConfig.VmConfig == nil || oldConfig.VmConfig == nil {
 		return false
 	}
@@ -133,11 +63,11 @@ func (w *wasmMangerImpl) shouldCreateNewPlugin(newConfig v2.WasmPluginConfig, ol
 	return false
 }
 
-func (w *wasmMangerImpl) updateWasm(pluginWrapper types.WasmPluginWrapper, newConfig v2.WasmPluginConfig) {
+func (w *wasmManagerImpl) updateWasm(pluginWrapper types.WasmPluginWrapper, newConfig v2.WasmPluginConfig) error {
 	oldConfig := pluginWrapper.GetConfig()
 	if reflect.DeepEqual(newConfig, oldConfig) {
 		log.DefaultLogger.Infof("[wasm][manager] AddOrUpdateWasm do not update for same config: %v", newConfig)
-		return
+		return ErrSameWasmConfig
 	}
 
 	plugin := pluginWrapper.GetPlugin()
@@ -147,13 +77,17 @@ func (w *wasmMangerImpl) updateWasm(pluginWrapper types.WasmPluginWrapper, newCo
 		plugin, err = NewWasmPlugin(newConfig)
 		if err != nil {
 			log.DefaultLogger.Errorf("[wasm][manager] updateWasm fail to create wasm plugin: %v, err: %v", newConfig.PluginName, err)
-			return
+			return err
 		}
 	} else {
+		if newConfig.InstanceNum <= 0 {
+			newConfig.InstanceNum = plugin.InstanceNum()
+		}
+
 		actualNum := plugin.EnsureInstanceNum(newConfig.InstanceNum)
 		if actualNum == 0 {
 			log.DefaultLogger.Errorf("[wasm][manager] updateWasm fail to update wasm instance num, want num: %v, actual num: %v", newConfig.InstanceNum, actualNum)
-			return
+			return ErrUpdateInstanceNum
 		}
 	}
 
@@ -163,9 +97,10 @@ func (w *wasmMangerImpl) updateWasm(pluginWrapper types.WasmPluginWrapper, newCo
 	pluginWrapper.Update(newConfig, plugin)
 
 	log.DefaultLogger.Infof("[wasm][manager] AddOrUpdateWasm update wasm plugin: %v, config: %v", newConfig.PluginName, newConfig)
+	return nil
 }
 
-func (w *wasmMangerImpl) AddOrUpdateWasm(config v2.WasmPluginConfig) error {
+func (w *wasmManagerImpl) AddOrUpdateWasm(config v2.WasmPluginConfig) error {
 	if config.PluginName == "" {
 		log.DefaultLogger.Errorf("[wasm][manager] AddOrUpdateWasm empty plugin name")
 		return ErrEmptyPluginName
@@ -178,7 +113,7 @@ func (w *wasmMangerImpl) AddOrUpdateWasm(config v2.WasmPluginConfig) error {
 			return ErrUnexpectedType
 		}
 
-		w.updateWasm(pluginWrapper, config)
+		return w.updateWasm(pluginWrapper, config)
 	} else {
 		// add new wasm plugin
 		plugin, err := NewWasmPlugin(config)
@@ -200,7 +135,7 @@ func (w *wasmMangerImpl) AddOrUpdateWasm(config v2.WasmPluginConfig) error {
 	return nil
 }
 
-func (w *wasmMangerImpl) GetWasmPluginWrapperByName(pluginName string) types.WasmPluginWrapper {
+func (w *wasmManagerImpl) GetWasmPluginWrapperByName(pluginName string) types.WasmPluginWrapper {
 	if pluginName == "" {
 		return nil
 	}
@@ -219,7 +154,7 @@ func (w *wasmMangerImpl) GetWasmPluginWrapperByName(pluginName string) types.Was
 	return nil
 }
 
-func (w *wasmMangerImpl) UninstallWasmPluginByName(pluginName string) error {
+func (w *wasmManagerImpl) UninstallWasmPluginByName(pluginName string) error {
 	v, ok := w.pluginMap.Load(pluginName)
 	if !ok {
 		log.DefaultLogger.Errorf("[wasm][manager] UninstallWasmPluginByName plugin not found, name: %v", pluginName)

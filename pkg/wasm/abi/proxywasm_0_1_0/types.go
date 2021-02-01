@@ -103,7 +103,7 @@ func toMosnLogLevel(level LogLevel) log.Level {
 	case LogLevelError:
 		return log.ERROR
 	case LogLevelCritical:
-		return log.FATAL
+		return log.ERROR
 	}
 	return log.INFO
 }

@@ -19,6 +19,7 @@ package x_proxy_wasm
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 
@@ -89,9 +90,8 @@ func NewFilter(ctx context.Context, pluginName string, rootContextID int32) *Fil
 	}
 
 	filter.abi.SetInstance(filter.instance)
-	filter.abi.SetInstanceCallBack(&proxyWasmInstanceCallback{filter: filter})
 
-	filter.instance.Acquire()
+	filter.instance.Acquire(filter)
 	_ = filter.exports.ProxyOnContextCreate(filter.contextID, filter.rootContextID)
 	filter.instance.Release()
 
@@ -100,7 +100,7 @@ func NewFilter(ctx context.Context, pluginName string, rootContextID int32) *Fil
 
 func (f *Filter) OnDestroy() {
 	f.destroyOnce.Do(func() {
-		f.instance.Acquire()
+		f.instance.Acquire(f)
 		_, _ = f.exports.ProxyOnDone(f.contextID)
 		f.instance.Release()
 
@@ -121,7 +121,7 @@ func (f *Filter) OnReceive(ctx context.Context, headers api.HeaderMap, buf buffe
 	f.reqBody = buf
 	f.reqTrailer = trailers
 
-	f.instance.Acquire()
+	f.instance.Acquire(f)
 	defer f.instance.Release()
 
 	// do filter
@@ -146,7 +146,7 @@ func (f *Filter) Append(ctx context.Context, headers api.HeaderMap, buf buffer.I
 	f.respBody = buf
 	f.respTrailer = trailers
 
-	f.instance.Acquire()
+	f.instance.Acquire(f)
 	defer f.instance.Release()
 
 	// do filter
@@ -164,4 +164,65 @@ func (f *Filter) Append(ctx context.Context, headers api.HeaderMap, buf buffer.I
 	}
 
 	return api.StreamFilterContinue
+}
+
+func (f *Filter) GetVmConfig() buffer.IoBuffer {
+	vmConfig := f.plugin.GetVmConfig()
+	vmConfigBytes, err := json.Marshal(vmConfig)
+	if err != nil {
+		return nil
+	}
+	return buffer.NewIoBufferBytes(vmConfigBytes)
+}
+
+func (f *Filter) GetPluginConfig() buffer.IoBuffer {
+	pluginConfig := f.plugin.GetPluginConfig()
+	pluginConfigBytes, err := json.Marshal(pluginConfig)
+	if err != nil {
+		return nil
+	}
+	return buffer.NewIoBufferBytes(pluginConfigBytes)
+}
+
+func (f *Filter) Log(level log.Level, msg string) {
+	logFunc := log.DefaultLogger.Infof
+	switch level {
+	case log.TRACE:
+		logFunc = log.DefaultLogger.Tracef
+	case log.DEBUG:
+		logFunc = log.DefaultLogger.Debugf
+	case log.INFO:
+		logFunc = log.DefaultLogger.Infof
+	case log.WARN:
+		logFunc = log.DefaultLogger.Warnf
+	case log.ERROR:
+		logFunc = log.DefaultLogger.Errorf
+	case log.FATAL:
+		logFunc = log.DefaultLogger.Fatalf
+	}
+	logFunc(msg)
+}
+
+func (f *Filter) GetHttpRequestHeader() api.HeaderMap {
+	return f.reqHeader
+}
+
+func (f *Filter) GetHttpRequestBody() buffer.IoBuffer {
+	return f.reqBody
+}
+
+func (f *Filter) GetHttpRequestTrailer() api.HeaderMap {
+	return f.reqTrailer
+}
+
+func (f *Filter) GetHttpResponseHeader() api.HeaderMap {
+	return f.respHeader
+}
+
+func (f *Filter) GetHttpResponseBody() buffer.IoBuffer {
+	return f.respBody
+}
+
+func (f *Filter) GetHttpResponseTrailer() api.HeaderMap {
+	return f.respTrailer
 }

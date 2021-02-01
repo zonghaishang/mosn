@@ -37,11 +37,16 @@ type Instance struct {
 	module       *wasmerGo.Module
 	importObject *wasmerGo.ImportObject
 	instance     *wasmerGo.Instance
-	memory       *wasmerGo.Memory
-	funcCache    sync.Map // string -> *wasmerGo.Function
+
+	// for cache
+	memory    *wasmerGo.Memory
+	funcCache sync.Map // string -> *wasmerGo.Function
+
+	// user-defined data
+	data interface{}
 }
 
-func newWasmerInstance(vm *VM, module *wasmerGo.Module) *Instance {
+func NewWasmerInstance(vm *VM, module *wasmerGo.Module) *Instance {
 	instance := &Instance{
 		vm:           vm,
 		module:       module,
@@ -53,13 +58,27 @@ func newWasmerInstance(vm *VM, module *wasmerGo.Module) *Instance {
 	return instance
 }
 
+func (w *Instance) GetData() interface{} {
+	return w.data
+}
+
+func (w *Instance) SetData(data interface{}) {
+	w.data = data
+}
+
 func (w *Instance) RegisterFunc(namespace string, funcName string, f interface{}) {
 	ftype := reflect.TypeOf(f)
 
 	argsNum := ftype.NumIn()
-	argsKind := make([]*wasmerGo.ValueType, argsNum)
-	for i := 0; i < argsNum; i++ {
-		argsKind[i] = convertFromGoType(ftype.In(i))
+	if argsNum < 1 {
+		log.DefaultLogger.Errorf("[wasmer][instance] RegisterFunc invalid args num: %v, must >= 1", argsNum)
+		return
+	}
+
+	// the first arg is types.WasmInstance
+	argsKind := make([]*wasmerGo.ValueType, argsNum-1)
+	for i := 1; i < argsNum; i++ {
+		argsKind[i-1] = convertFromGoType(ftype.In(i))
 	}
 
 	retsNum := ftype.NumOut()
@@ -72,7 +91,12 @@ func (w *Instance) RegisterFunc(namespace string, funcName string, f interface{}
 		w.vm.store,
 		wasmerGo.NewFunctionType(argsKind, retsKind),
 		func(args []wasmerGo.Value) ([]wasmerGo.Value, error) {
-			aa := convertToGoTypes(args)
+			aa := make([]reflect.Value, 1+len(args))
+			aa[0] = reflect.ValueOf(w)
+
+			for i, arg := range args {
+				aa[i+1] = convertToGoTypes(arg)
+			}
 
 			callResult := reflect.ValueOf(f).Call(aa)
 

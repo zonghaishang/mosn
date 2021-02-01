@@ -18,31 +18,24 @@
 package proxywasm_0_1_0
 
 import (
-	"mosn.io/mosn/pkg/log"
 	"mosn.io/mosn/pkg/types"
 	"mosn.io/mosn/pkg/wasm/abi"
 )
 
 func init() {
-	abi.RegisterABI("proxy_abi_version_0_1_0", &abiImpl{})
+	abi.RegisterABI("proxy_abi_version_0_1_0", abiImplFactory)
+}
+
+func abiImplFactory() abi.ABI {
+	return &abiImpl{}
 }
 
 type abiImpl struct {
 	instance types.WasmInstance
-	callback InstanceCallback
 }
 
 func (a *abiImpl) SetInstance(instance types.WasmInstance) {
 	a.instance = instance
-}
-
-func (a *abiImpl) SetInstanceCallBack(callback interface{}) {
-	cb, ok := callback.(InstanceCallback)
-	if !ok {
-		log.DefaultLogger.Errorf("[proxywasm_0_1_0][impl] SetInstanceCallBack invalid callback type")
-		return
-	}
-	a.callback = cb
 }
 
 func (a *abiImpl) OnStart(instance types.WasmInstance) {
@@ -54,50 +47,47 @@ func (a *abiImpl) OnInstanceDestroy(instance types.WasmInstance) {
 }
 
 func (a *abiImpl) OnInstanceCreate(instance types.WasmInstance) {
+	instance.RegisterFunc("env", "proxy_log", proxyLog)
 
-	instance.RegisterFunc("env", "proxy_log", a.proxyLog)
+	instance.RegisterFunc("env", "proxy_set_effective_context", proxySetEffectiveContext)
 
-	instance.RegisterFunc("env", "proxy_set_effective_context", a.proxySetEffectiveContext)
+	instance.RegisterFunc("env", "proxy_get_property", proxyGetProperty)
+	instance.RegisterFunc("env", "proxy_set_property", proxySetProperty)
 
-	instance.RegisterFunc("env", "proxy_get_property", a.proxyGetProperty)
-	instance.RegisterFunc("env", "proxy_set_property", a.proxySetProperty)
+	instance.RegisterFunc("env", "proxy_get_buffer_bytes", proxyGetBufferBytes)
+	instance.RegisterFunc("env", "proxy_set_buffer_bytes", proxySetBufferBytes)
 
-	instance.RegisterFunc("env", "proxy_get_buffer_bytes", a.proxyGetBufferBytes)
-	instance.RegisterFunc("env", "proxy_set_buffer_bytes", a.proxySetBufferBytes)
+	instance.RegisterFunc("env", "proxy_get_header_map_pairs", proxyGetHeaderMapPairs)
+	instance.RegisterFunc("env", "proxy_set_header_map_pairs", proxySetHeaderMapPairs)
 
-	instance.RegisterFunc("env", "proxy_get_header_map_pairs", a.proxyGetHeaderMapPairs)
-	instance.RegisterFunc("env", "proxy_set_header_map_pairs", a.proxySetHeaderMapPairs)
+	instance.RegisterFunc("env", "proxy_get_header_map_value", proxyGetHeaderMapValue)
+	instance.RegisterFunc("env", "proxy_replace_header_map_value", proxyReplaceHeaderMapValue)
+	instance.RegisterFunc("env", "proxy_add_header_map_value", proxyAddHeaderMapValue)
+	instance.RegisterFunc("env", "proxy_remove_header_map_value", proxyRemoveHeaderMapValue)
 
-	instance.RegisterFunc("env", "proxy_get_header_map_value", a.proxyGetHeaderMapValue)
-	instance.RegisterFunc("env", "proxy_replace_header_map_value", a.proxyReplaceHeaderMapValue)
-	instance.RegisterFunc("env", "proxy_add_header_map_value", a.proxyAddHeaderMapValue)
-	instance.RegisterFunc("env", "proxy_remove_header_map_value", a.proxyRemoveHeaderMapValue)
+	instance.RegisterFunc("env", "proxy_set_tick_period_milliseconds", proxySetTickPeriodMilliseconds)
+	instance.RegisterFunc("env", "proxy_get_current_time_nanoseconds", proxyGetCurrentTimeNanoseconds)
 
-	instance.RegisterFunc("env", "proxy_set_tick_period_milliseconds", a.proxySetTickPeriodMilliseconds)
-	instance.RegisterFunc("env", "proxy_get_current_time_nanoseconds", a.proxyGetCurrentTimeNanoseconds)
+	instance.RegisterFunc("env", "proxy_grpc_call", proxyGrpcCall)
+	instance.RegisterFunc("env", "proxy_grpc_stream", proxyGrpcStream)
+	instance.RegisterFunc("env", "proxy_grpc_cancel", proxyGrpcCancel)
+	instance.RegisterFunc("env", "proxy_grpc_close", proxyGrpcClose)
+	instance.RegisterFunc("env", "proxy_grpc_send", proxyGrpcSend)
 
-	instance.RegisterFunc("env", "proxy_grpc_call", a.proxyGrpcCall)
-	instance.RegisterFunc("env", "proxy_grpc_stream", a.proxyGrpcStream)
-	instance.RegisterFunc("env", "proxy_grpc_cancel", a.proxyGrpcCancel)
-	instance.RegisterFunc("env", "proxy_grpc_close", a.proxyGrpcClose)
-	instance.RegisterFunc("env", "proxy_grpc_send", a.proxyGrpcSend)
+	instance.RegisterFunc("env", "proxy_http_call", proxyHttpCall)
 
-	instance.RegisterFunc("env", "proxy_http_call", a.proxyHttpCall)
+	instance.RegisterFunc("env", "proxy_define_metric", proxyDefineMetric)
+	instance.RegisterFunc("env", "proxy_increment_metric", proxyIncrementMetric)
+	instance.RegisterFunc("env", "proxy_record_metric", proxyRecordMetric)
+	instance.RegisterFunc("env", "proxy_get_metric", proxyGetMetric)
 
-	instance.RegisterFunc("env", "proxy_define_metric", a.proxyDefineMetric)
-	instance.RegisterFunc("env", "proxy_increment_metric", a.proxyIncrementMetric)
-	instance.RegisterFunc("env", "proxy_record_metric", a.proxyRecordMetric)
-	instance.RegisterFunc("env", "proxy_get_metric", a.proxyGetMetric)
+	instance.RegisterFunc("env", "proxy_register_shared_queue", proxyRegisterSharedQueue)
+	instance.RegisterFunc("env", "proxy_resolve_shared_queue", proxyResolveSharedQueue)
+	instance.RegisterFunc("env", "proxy_dequeue_shared_queue", proxyDequeueSharedQueue)
+	instance.RegisterFunc("env", "proxy_enqueue_shared_queue", proxyEnqueueSharedQueue)
 
-	instance.RegisterFunc("env", "proxy_register_shared_queue", a.proxyRegisterSharedQueue)
-	instance.RegisterFunc("env", "proxy_resolve_shared_queue", a.proxyResolveSharedQueue)
-	instance.RegisterFunc("env", "proxy_dequeue_shared_queue", a.proxyDequeueSharedQueue)
-	instance.RegisterFunc("env", "proxy_enqueue_shared_queue", a.proxyEnqueueSharedQueue)
-
-	instance.RegisterFunc("env", "proxy_get_shared_data", a.proxyGetSharedData)
-	instance.RegisterFunc("env", "proxy_set_shared_data", a.proxySetSharedData)
-
-	a.SetInstance(instance)
+	instance.RegisterFunc("env", "proxy_get_shared_data", proxyGetSharedData)
+	instance.RegisterFunc("env", "proxy_set_shared_data", proxySetSharedData)
 
 	return
 }

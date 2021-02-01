@@ -150,14 +150,14 @@ func testCommon(t *testing.T, pluginName string, engine string, path string) {
 
 	plugin := manager.GetWasmPluginWrapperByName(pluginName).GetPlugin()
 	instance := plugin.GetInstance()
-	instance.Acquire()
-	defer instance.Release()
 
 	cb := newMockInstanceCallback(ctrl)
 
+	instance.Acquire(cb)
+	defer instance.Release()
+
 	proxyWasm := abi.GetABI("proxy_abi_version_0_1_0")
 	proxyWasm.SetInstance(instance)
-	proxyWasm.SetInstanceCallBack(cb)
 
 	exports := proxyWasm.(proxywasm_0_1_0.Exports)
 
@@ -220,11 +220,10 @@ func benchCommon(b *testing.B, pluginName string, engine string, path string) {
 
 	proxyWasm := abi.GetABI("proxy_abi_version_0_1_0")
 	proxyWasm.SetInstance(instance)
-	proxyWasm.SetInstanceCallBack(cb)
 
 	exports := proxyWasm.(proxywasm_0_1_0.Exports)
 
-	instance.Acquire()
+	instance.Acquire(cb)
 
 	rootContextID := 100
 	_ = exports.ProxyOnContextCreate(int32(rootContextID), 0)
@@ -234,7 +233,7 @@ func benchCommon(b *testing.B, pluginName string, engine string, path string) {
 	instance.Release()
 
 	for i := 0; i < b.N; i++ {
-		instance.Acquire()
+		instance.Acquire(cb)
 
 		contextID := 101 + i
 		_ = exports.ProxyOnContextCreate(int32(contextID), int32(rootContextID))

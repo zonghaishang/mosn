@@ -22,26 +22,43 @@ import (
 
 	"mosn.io/api"
 	"mosn.io/mosn/pkg/log"
+	"mosn.io/mosn/pkg/types"
 	"mosn.io/pkg/buffer"
 )
 
-func (a *abiImpl) proxyLog(level int32, logDataPtr int32, logDataSize int32) int32 {
-	logContent, err := a.instance.GetMemory(uint64(logDataPtr), uint64(logDataSize))
+func getInstanceCallback(instance types.WasmInstance) InstanceCallback {
+	v := instance.GetData()
+	if v == nil {
+		return &DefaultInstanceCallback{}
+	}
+
+	cb, ok := v.(InstanceCallback)
+	if !ok {
+		return &DefaultInstanceCallback{}
+	}
+
+	return cb
+}
+
+func proxyLog(instance types.WasmInstance, level int32, logDataPtr int32, logDataSize int32) int32 {
+	callback := getInstanceCallback(instance)
+
+	logContent, err := instance.GetMemory(uint64(logDataPtr), uint64(logDataSize))
 	if err != nil {
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
 
-	a.callback.Log(toMosnLogLevel(LogLevel(level)), string(logContent))
+	callback.Log(toMosnLogLevel(LogLevel(level)), string(logContent))
 
 	return WasmResultOk.Int32()
 }
 
-func (a *abiImpl) proxyGetBufferBytes(bufferType int32, start int32, length int32, returnBufferData int32, returnBufferSize int32) int32 {
+func proxyGetBufferBytes(instance types.WasmInstance, bufferType int32, start int32, length int32, returnBufferData int32, returnBufferSize int32) int32 {
 	if BufferType(bufferType) > BufferTypeMax {
 		return WasmResultBadArgument.Int32()
 	}
 
-	buf := a.GetBuffer(BufferType(bufferType))
+	buf := GetBuffer(instance, BufferType(bufferType))
 	if buf == nil {
 		return WasmResultNotFound.Int32()
 	}
@@ -54,33 +71,33 @@ func (a *abiImpl) proxyGetBufferBytes(bufferType int32, start int32, length int3
 		length = int32(buf.Len()) - start
 	}
 
-	addr, err := a.instance.Malloc(int32(length))
+	addr, err := instance.Malloc(int32(length))
 	if err != nil {
 		return WasmResultInternalFailure.Int32()
 	}
 
-	err = a.instance.PutMemory(addr, uint64(length), buf.Bytes())
+	err = instance.PutMemory(addr, uint64(length), buf.Bytes())
 	if err != nil {
 		return WasmResultInternalFailure.Int32()
 	}
 
-	_ = a.instance.PutUint32(uint64(returnBufferData), uint32(addr))
-	_ = a.instance.PutUint32(uint64(returnBufferSize), uint32(length))
+	_ = instance.PutUint32(uint64(returnBufferData), uint32(addr))
+	_ = instance.PutUint32(uint64(returnBufferSize), uint32(length))
 
 	return WasmResultOk.Int32()
 }
 
-func (a *abiImpl) proxySetBufferBytes(bufferType int32, start int32, length int32, dataPtr int32, dataSize int32) int32 {
+func proxySetBufferBytes(instance types.WasmInstance, bufferType int32, start int32, length int32, dataPtr int32, dataSize int32) int32 {
 	if BufferType(bufferType) > BufferTypeMax {
 		return WasmResultBadArgument.Int32()
 	}
 
-	buf := a.GetBuffer(BufferType(bufferType))
+	buf := GetBuffer(instance, BufferType(bufferType))
 	if buf == nil {
 		return WasmResultNotFound.Int32()
 	}
 
-	content, err := a.instance.GetMemory(uint64(dataPtr), uint64(dataSize))
+	content, err := instance.GetMemory(uint64(dataPtr), uint64(dataSize))
 	if err != nil {
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
@@ -94,40 +111,44 @@ func (a *abiImpl) proxySetBufferBytes(bufferType int32, start int32, length int3
 	return WasmResultOk.Int32()
 }
 
-func (a *abiImpl) GetBuffer(bufferType BufferType) buffer.IoBuffer {
+func GetBuffer(instance types.WasmInstance, bufferType BufferType) buffer.IoBuffer {
+	callback := getInstanceCallback(instance)
+
 	switch bufferType {
 	case BufferTypeHttpRequestBody:
-		return a.callback.GetHttpRequestBody()
+		return callback.GetHttpRequestBody()
 	case BufferTypeHttpResponseBody:
-		return a.callback.GetHttpResponseBody()
+		return callback.GetHttpResponseBody()
 	case BufferTypePluginConfiguration:
-		return a.callback.GetPluginConfig()
+		return callback.GetPluginConfig()
 	case BufferTypeVmConfiguration:
-		return a.callback.GetVmConfig()
+		return callback.GetVmConfig()
 	}
 	return nil
 }
 
-func (a *abiImpl) GetMap(mapType MapType) api.HeaderMap {
+func GetMap(instance types.WasmInstance, mapType MapType) api.HeaderMap {
+	callback := getInstanceCallback(instance)
+
 	switch mapType {
 	case MapTypeHttpRequestHeaders:
-		return a.callback.GetHttpRequestHeader()
+		return callback.GetHttpRequestHeader()
 	case MapTypeHttpRequestTrailers:
-		return a.callback.GetHttpRequestTrailer()
+		return callback.GetHttpRequestTrailer()
 	case MapTypeHttpResponseHeaders:
-		return a.callback.GetHttpResponseHeader()
+		return callback.GetHttpResponseHeader()
 	case MapTypeHttpResponseTrailers:
-		return a.callback.GetHttpResponseTrailer()
+		return callback.GetHttpResponseTrailer()
 	}
 	return nil
 }
 
-func (a *abiImpl) proxyGetHeaderMapPairs(mapType int32, returnDataPtr int32, returnDataSize int32) int32 {
+func proxyGetHeaderMapPairs(instance types.WasmInstance, mapType int32, returnDataPtr int32, returnDataSize int32) int32 {
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
 	}
 
-	header := a.GetMap(MapType(mapType))
+	header := GetMap(instance, MapType(mapType))
 	if header == nil {
 		return WasmResultNotFound.Int32()
 	}
@@ -141,41 +162,41 @@ func (a *abiImpl) proxyGetHeaderMapPairs(mapType int32, returnDataPtr int32, ret
 		return true
 	})
 
-	addr, err := a.instance.Malloc(int32(totalBytesLen))
+	addr, err := instance.Malloc(int32(totalBytesLen))
 	if err != nil {
 		log.DefaultLogger.Errorf("wasm malloc error: %v", err)
 		return WasmResultInternalFailure.Int32()
 	}
 
-	err = a.instance.PutUint32(addr, uint32(len(cloneMap)))
+	err = instance.PutUint32(addr, uint32(len(cloneMap)))
 
 	lenPtr := addr + 4
 	dataPtr := lenPtr + uint64(8*len(cloneMap))
 	for k, v := range cloneMap {
-		err = a.instance.PutUint32(lenPtr, uint32(len(k)))
+		err = instance.PutUint32(lenPtr, uint32(len(k)))
 		lenPtr += 4
-		err = a.instance.PutUint32(lenPtr, uint32(len(v)))
+		err = instance.PutUint32(lenPtr, uint32(len(v)))
 		lenPtr += 4
 
-		err = a.instance.PutMemory(dataPtr, uint64(len(k)), []byte(k))
+		err = instance.PutMemory(dataPtr, uint64(len(k)), []byte(k))
 		dataPtr += uint64(len(k))
-		err = a.instance.PutByte(dataPtr, 0)
+		err = instance.PutByte(dataPtr, 0)
 		dataPtr++
 
-		err = a.instance.PutMemory(dataPtr, uint64(len(v)), []byte(v))
+		err = instance.PutMemory(dataPtr, uint64(len(v)), []byte(v))
 		dataPtr += uint64(len(v))
-		err = a.instance.PutByte(dataPtr, 0)
+		err = instance.PutByte(dataPtr, 0)
 		dataPtr++
 	}
 
-	err = a.instance.PutUint32(uint64(returnDataPtr), uint32(addr))
-	err = a.instance.PutUint32(uint64(returnDataSize), uint32(totalBytesLen))
+	err = instance.PutUint32(uint64(returnDataPtr), uint32(addr))
+	err = instance.PutUint32(uint64(returnDataSize), uint32(totalBytesLen))
 
 	return WasmResultOk.Int32()
 }
 
 // unmarshal map from rawData
-func (a *abiImpl) unmarshalMap(rawData []byte) map[string]string {
+func unmarshalMap(rawData []byte) map[string]string {
 	if len(rawData) < 4 {
 		return nil
 	}
@@ -200,22 +221,22 @@ func (a *abiImpl) unmarshalMap(rawData []byte) map[string]string {
 	return res
 }
 
-func (a *abiImpl) proxySetHeaderMapPairs(mapType int32, ptr int32, size int32) int32 {
+func proxySetHeaderMapPairs(instance types.WasmInstance, mapType int32, ptr int32, size int32) int32 {
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
 	}
 
-	headerMap := a.GetMap(MapType(mapType))
+	headerMap := GetMap(instance, MapType(mapType))
 	if headerMap == nil {
 		return WasmResultNotFound.Int32()
 	}
 
-	newMapContent, err := a.instance.GetMemory(uint64(ptr), uint64(size))
+	newMapContent, err := instance.GetMemory(uint64(ptr), uint64(size))
 	if err != nil {
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
 
-	newMap := a.unmarshalMap(newMapContent)
+	newMap := unmarshalMap(newMapContent)
 
 	for k, v := range newMap {
 		headerMap.Set(k, v)
@@ -224,17 +245,17 @@ func (a *abiImpl) proxySetHeaderMapPairs(mapType int32, ptr int32, size int32) i
 	return WasmResultOk.Int32()
 }
 
-func (a *abiImpl) proxyGetHeaderMapValue(mapType int32, keyDataPtr int32, keySize int32, valueDataPtr int32, valueSize int32) int32 {
+func proxyGetHeaderMapValue(instance types.WasmInstance, mapType int32, keyDataPtr int32, keySize int32, valueDataPtr int32, valueSize int32) int32 {
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
 	}
 
-	headerMap := a.GetMap(MapType(mapType))
+	headerMap := GetMap(instance, MapType(mapType))
 	if headerMap == nil {
 		return WasmResultNotFound.Int32()
 	}
 
-	key, err := a.instance.GetMemory(uint64(keyDataPtr), uint64(keySize))
+	key, err := instance.GetMemory(uint64(keyDataPtr), uint64(keySize))
 	if err != nil {
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
@@ -247,30 +268,30 @@ func (a *abiImpl) proxyGetHeaderMapValue(mapType int32, keyDataPtr int32, keySiz
 		return WasmResultNotFound.Int32()
 	}
 
-	addr, err := a.instance.Malloc(int32(len(value)))
+	addr, err := instance.Malloc(int32(len(value)))
 	if err != nil {
 		return WasmResultInternalFailure.Int32()
 	}
 
-	err = a.instance.PutMemory(addr, uint64(len(value)), []byte(value))
+	err = instance.PutMemory(addr, uint64(len(value)), []byte(value))
 
-	err = a.instance.PutUint32(uint64(valueDataPtr), uint32(addr))
-	err = a.instance.PutUint32(uint64(valueSize), uint32(len(value)))
+	err = instance.PutUint32(uint64(valueDataPtr), uint32(addr))
+	err = instance.PutUint32(uint64(valueSize), uint32(len(value)))
 
 	return WasmResultOk.Int32()
 }
 
-func (a *abiImpl) proxyReplaceHeaderMapValue(mapType int32, keyDataPtr int32, keySize int32, valueDataPtr int32, valueSize int32) int32 {
+func proxyReplaceHeaderMapValue(instance types.WasmInstance, mapType int32, keyDataPtr int32, keySize int32, valueDataPtr int32, valueSize int32) int32 {
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
 	}
 
-	headerMap := a.GetMap(MapType(mapType))
+	headerMap := GetMap(instance, MapType(mapType))
 	if headerMap == nil {
 		return WasmResultNotFound.Int32()
 	}
 
-	key, err := a.instance.GetMemory(uint64(keyDataPtr), uint64(keySize))
+	key, err := instance.GetMemory(uint64(keyDataPtr), uint64(keySize))
 	if err != nil {
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
@@ -278,7 +299,7 @@ func (a *abiImpl) proxyReplaceHeaderMapValue(mapType int32, keyDataPtr int32, ke
 		return WasmResultBadArgument.Int32()
 	}
 
-	value, err := a.instance.GetMemory(uint64(valueDataPtr), uint64(valueSize))
+	value, err := instance.GetMemory(uint64(valueDataPtr), uint64(valueSize))
 	if err != nil {
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
@@ -291,17 +312,17 @@ func (a *abiImpl) proxyReplaceHeaderMapValue(mapType int32, keyDataPtr int32, ke
 	return WasmResultOk.Int32()
 }
 
-func (a *abiImpl) proxyAddHeaderMapValue(mapType int32, keyDataPtr int32, keySize int32, valueDataPtr int32, valueSize int32) int32 {
+func proxyAddHeaderMapValue(instance types.WasmInstance, mapType int32, keyDataPtr int32, keySize int32, valueDataPtr int32, valueSize int32) int32 {
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
 	}
 
-	headerMap := a.GetMap(MapType(mapType))
+	headerMap := GetMap(instance, MapType(mapType))
 	if headerMap == nil {
 		return WasmResultNotFound.Int32()
 	}
 
-	key, err := a.instance.GetMemory(uint64(keyDataPtr), uint64(keySize))
+	key, err := instance.GetMemory(uint64(keyDataPtr), uint64(keySize))
 	if err != nil {
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
@@ -309,7 +330,7 @@ func (a *abiImpl) proxyAddHeaderMapValue(mapType int32, keyDataPtr int32, keySiz
 		return WasmResultBadArgument.Int32()
 	}
 
-	value, err := a.instance.GetMemory(uint64(valueDataPtr), uint64(valueSize))
+	value, err := instance.GetMemory(uint64(valueDataPtr), uint64(valueSize))
 	if err != nil {
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
@@ -322,17 +343,17 @@ func (a *abiImpl) proxyAddHeaderMapValue(mapType int32, keyDataPtr int32, keySiz
 	return WasmResultOk.Int32()
 }
 
-func (a *abiImpl) proxyRemoveHeaderMapValue(mapType int32, keyDataPtr int32, keySize int32) int32 {
+func proxyRemoveHeaderMapValue(instance types.WasmInstance, mapType int32, keyDataPtr int32, keySize int32) int32 {
 	if MapType(mapType) > MapTypeMax {
 		return WasmResultBadArgument.Int32()
 	}
 
-	headerMap := a.GetMap(MapType(mapType))
+	headerMap := GetMap(instance, MapType(mapType))
 	if headerMap == nil {
 		return WasmResultNotFound.Int32()
 	}
 
-	key, err := a.instance.GetMemory(uint64(keyDataPtr), uint64(keySize))
+	key, err := instance.GetMemory(uint64(keyDataPtr), uint64(keySize))
 	if err != nil {
 		return WasmResultInvalidMemoryAccess.Int32()
 	}
@@ -345,27 +366,27 @@ func (a *abiImpl) proxyRemoveHeaderMapValue(mapType int32, keyDataPtr int32, key
 	return WasmResultOk.Int32()
 }
 
-func (a *abiImpl) proxyGetProperty(keyPtr int32, keySize int32, returnValueData int32, returnValueSize int32) int32 {
+func proxyGetProperty(instance types.WasmInstance, keyPtr int32, keySize int32, returnValueData int32, returnValueSize int32) int32 {
 	return WasmResultOk.Int32()
 }
 
-func (a *abiImpl) proxySetProperty(keyPtr int32, keySize int32, valuePtr int32, valueSize int32) int32 {
+func proxySetProperty(instance types.WasmInstance, keyPtr int32, keySize int32, valuePtr int32, valueSize int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxySetEffectiveContext(contextID int32) int32 {
+func proxySetEffectiveContext(instance types.WasmInstance, contextID int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxySetTickPeriodMilliseconds(tickPeriodMilliseconds int32) int32 {
+func proxySetTickPeriodMilliseconds(instance types.WasmInstance, tickPeriodMilliseconds int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyGetCurrentTimeNanoseconds(resultUint64Ptr int32) int32 {
+func proxyGetCurrentTimeNanoseconds(instance types.WasmInstance, resultUint64Ptr int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyGrpcCall(servicePtr int32, serviceSize int32, serviceNamePtr int32, serviceNameSize int32,
+func proxyGrpcCall(instance types.WasmInstance, servicePtr int32, serviceSize int32, serviceNamePtr int32, serviceNameSize int32,
 	methodNamePtr int32, methodNameSize int32,
 	initialMetadataPtr int32, initialMetadataSize int32,
 	requestPtr int32, requestSize int32,
@@ -373,26 +394,26 @@ func (a *abiImpl) proxyGrpcCall(servicePtr int32, serviceSize int32, serviceName
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyGrpcStream(servicePtr int32, serviceSize int32, serviceNamePtr int32, serviceNameSize int32,
+func proxyGrpcStream(instance types.WasmInstance, servicePtr int32, serviceSize int32, serviceNamePtr int32, serviceNameSize int32,
 	methodNamePtr int32, methodNameSize int32,
 	initialMetadataPtr int32, initialMetadataSize int32,
 	tokenPtr int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyGrpcCancel(token int32) int32 {
+func proxyGrpcCancel(instance types.WasmInstance, token int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyGrpcClose(token int32) int32 {
+func proxyGrpcClose(instance types.WasmInstance, token int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyGrpcSend(token int32, messagePtr int32, messageSize int32, endStream int32) int32 {
+func proxyGrpcSend(instance types.WasmInstance, token int32, messagePtr int32, messageSize int32, endStream int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyHttpCall(uriPtr int32, uriSize int32,
+func proxyHttpCall(instance types.WasmInstance, uriPtr int32, uriSize int32,
 	headerPairsPtr int32, headerPairsSize int32,
 	bodyPtr int32, bodySize int32,
 	trailerPairsPtr int32, trailerPairsSize int32,
@@ -400,42 +421,42 @@ func (a *abiImpl) proxyHttpCall(uriPtr int32, uriSize int32,
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyDefineMetric(metricType int32, namePtr int32, nameSize int32, resultPtr int32) int32 {
+func proxyDefineMetric(instance types.WasmInstance, metricType int32, namePtr int32, nameSize int32, resultPtr int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyIncrementMetric(metricId int32, offset int64) int32 {
+func proxyIncrementMetric(instance types.WasmInstance, metricId int32, offset int64) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyRecordMetric(metricId int32, value int64) int32 {
+func proxyRecordMetric(instance types.WasmInstance, metricId int32, value int64) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyGetMetric(metricId int32, resultUint64Ptr int32) int32 {
+func proxyGetMetric(instance types.WasmInstance, metricId int32, resultUint64Ptr int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyRegisterSharedQueue(queueNamePtr int32, queueNameSize int32, tokenPtr int32) int32 {
+func proxyRegisterSharedQueue(instance types.WasmInstance, queueNamePtr int32, queueNameSize int32, tokenPtr int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyResolveSharedQueue(vmIdPtr int32, vmIdSize int32, queueNamePtr int32, queueNameSize int32, tokenPtr int32) int32 {
+func proxyResolveSharedQueue(instance types.WasmInstance, vmIdPtr int32, vmIdSize int32, queueNamePtr int32, queueNameSize int32, tokenPtr int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyDequeueSharedQueue(token int32, dataPtr int32, dataSize int32) int32 {
+func proxyDequeueSharedQueue(instance types.WasmInstance, token int32, dataPtr int32, dataSize int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyEnqueueSharedQueue(token int32, dataPtr int32, dataSize int32) int32 {
+func proxyEnqueueSharedQueue(instance types.WasmInstance, token int32, dataPtr int32, dataSize int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxyGetSharedData(keyPtr int32, keySize int32, valuePtr int32, valueSizePtr int32, casPtr int32) int32 {
+func proxyGetSharedData(instance types.WasmInstance, keyPtr int32, keySize int32, valuePtr int32, valueSizePtr int32, casPtr int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }
 
-func (a *abiImpl) proxySetSharedData(keyPtr int32, keySize int32, valuePtr int32, valueSize int32, cas int32) int32 {
+func proxySetSharedData(instance types.WasmInstance, keyPtr int32, keySize int32, valuePtr int32, valueSize int32, cas int32) int32 {
 	return WasmResultUnimplemented.Int32()
 }

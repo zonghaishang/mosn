@@ -136,12 +136,10 @@ func (f *FilterConfigFactory) OnPluginStart(plugin types.WasmPlugin) {
 	}
 
 	plugin.Exec(func(instanceWrapper types.WasmInstanceWrapper) bool {
-		instanceWrapper.Acquire()
+		instanceWrapper.Acquire(f)
 		defer instanceWrapper.Release()
 
 		abiVersion.SetInstance(instanceWrapper)
-		abiVersion.SetInstanceCallBack(f)
-
 		exports := abiVersion.(proxywasm_0_1_0.Exports)
 
 		_ = exports.ProxyOnContextCreate(f.config.RootContextID, 0)

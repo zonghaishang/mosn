@@ -40,21 +40,18 @@ func convertFromGoType(t reflect.Type) *wasmerGo.ValueType {
 	return nil
 }
 
-func convertToGoTypes(in []wasmerGo.Value) []reflect.Value {
-	res := make([]reflect.Value, len(in))
-	for i, v := range in {
-		switch v.Kind() {
-		case wasmerGo.I32:
-			res[i] = reflect.ValueOf(v.I32())
-		case wasmerGo.I64:
-			res[i] = reflect.ValueOf(v.I64())
-		case wasmerGo.F32:
-			res[i] = reflect.ValueOf(v.F32())
-		case wasmerGo.F64:
-			res[i] = reflect.ValueOf(v.F64())
-		}
+func convertToGoTypes(in wasmerGo.Value) reflect.Value {
+	switch in.Kind() {
+	case wasmerGo.I32:
+		return reflect.ValueOf(in.I32())
+	case wasmerGo.I64:
+		return reflect.ValueOf(in.I64())
+	case wasmerGo.F32:
+		return reflect.ValueOf(in.F32())
+	case wasmerGo.F64:
+		return reflect.ValueOf(in.F64())
 	}
-	return res
+	return reflect.Value{}
 }
 
 func convertFromGoValue(val reflect.Value) wasmerGo.Value {

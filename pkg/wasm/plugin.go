@@ -35,6 +35,80 @@ var (
 	ErrModuleCreate   = errors.New("fail to create wasm module")
 )
 
+type pluginWrapper struct {
+	mu             sync.RWMutex
+	plugin         types.WasmPlugin
+	config         v2.WasmPluginConfig
+	pluginHandlers []types.WasmPluginHandler
+}
+
+func (w *pluginWrapper) RegisterPluginHandler(pluginHandler types.WasmPluginHandler) {
+	if pluginHandler == nil {
+		return
+	}
+
+	w.mu.Lock()
+	w.pluginHandlers = append(w.pluginHandlers, pluginHandler)
+	w.mu.Unlock()
+
+	pluginHandler.OnConfigUpdate(w.config)
+	pluginHandler.OnPluginStart(w.plugin)
+}
+
+func (w *pluginWrapper) GetPlugin() types.WasmPlugin {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	return w.plugin
+}
+
+func (w *pluginWrapper) GetConfig() v2.WasmPluginConfig {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	return w.config
+}
+
+func (w *pluginWrapper) Update(config v2.WasmPluginConfig, plugin types.WasmPlugin) {
+	if config.PluginName == "" || config.PluginName != w.GetConfig().PluginName {
+		return
+	}
+
+	// update config
+	for _, handler := range w.pluginHandlers {
+		handler.OnConfigUpdate(config)
+	}
+
+	w.mu.Lock()
+	w.config = config
+	w.mu.Unlock()
+
+	// update plugin
+	if plugin == nil {
+		return
+	}
+
+	// check same plugin
+	oldPlugin := w.GetPlugin()
+	if plugin == oldPlugin {
+		return
+	}
+
+	// do update plugin
+	for _, handler := range w.pluginHandlers {
+		handler.OnPluginStart(plugin)
+	}
+
+	w.mu.Lock()
+	w.plugin = plugin
+	w.mu.Unlock()
+
+	for _, handler := range w.pluginHandlers {
+		handler.OnPluginDestroy(oldPlugin)
+	}
+	oldPlugin.Clear()
+}
+
 type wasmPluginImpl struct {
 	config v2.WasmPluginConfig
 
@@ -153,6 +227,7 @@ func (w *wasmPluginImpl) PluginName() string {
 
 func (w *wasmPluginImpl) Clear() {
 	// do nothing
+	log.DefaultLogger.Infof("[wasm][plugin] Clear wasm plugin, config: %v, instanceNum: %v", w.config, w.instanceNum)
 	return
 }
 
@@ -204,6 +279,7 @@ func (w *wasmPluginImpl) ReleaseInstance(instanceWrapper types.WasmInstanceWrapp
 	atomic.AddInt32(&w.occupy, -1)
 }
 
+// DefaultWasmPluginHandler is the default implementation of types.WasmPluginHandler
 type DefaultWasmPluginHandler struct{}
 
 func (d *DefaultWasmPluginHandler) OnConfigUpdate(config v2.WasmPluginConfig) {

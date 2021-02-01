@@ -59,7 +59,7 @@ func (w *Module) GetABIList() []abi.ABI {
 func (w *Module) NewInstance() types.WasmInstance {
 	abiList := w.GetABIList()
 
-	res := newWasmerInstance(w.vm, w.module)
+	res := NewWasmerInstance(w.vm, w.module)
 
 	for _, v := range abiList {
 		v.OnInstanceCreate(res)

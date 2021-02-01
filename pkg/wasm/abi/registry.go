@@ -18,24 +18,44 @@
 package abi
 
 import (
+	"sync"
+
 	"mosn.io/mosn/pkg/types"
 )
 
-var abiMap = make(map[string]ABI)
+// Factory is the ABI factory func
+type Factory func() ABI
 
+// string -> Factory
+var abiMap = sync.Map{}
+
+// ABI represents the abi between the host and wasm, which consists of two parts: exports and life-cycle handler
+// *exports* represents the exports elements of the wasm module
+// *life-cycle handler* is used to manage the life-cycle of an abi
 type ABI interface {
+	// life-cycle: OnInstanceCreate got called when instantiating the wasm instance
 	OnInstanceCreate(instance types.WasmInstance)
+
+	// life-cycle: OnStart got called when starting the wasm instance
 	OnStart(instance types.WasmInstance)
+
+	// life-cycle: OnInstanceDestroy got called when destroying the wasm instance
 	OnInstanceDestroy(instance types.WasmInstance)
 
+	// life-cycle: SetInstance sets the wasm instance to the abi
 	SetInstance(instance types.WasmInstance)
-	SetInstanceCallBack(callback interface{})
 }
 
-func RegisterABI(abiName string, abiImpl ABI) {
-	abiMap[abiName] = abiImpl
+// RegisterABI registers an abi factory
+func RegisterABI(abiName string, factory Factory) {
+	abiMap.Store(abiName, factory)
 }
 
+// GetABI returns an abi by name
 func GetABI(abiName string) ABI {
-	return abiMap[abiName]
+	if v, ok := abiMap.Load(abiName); ok {
+		factory := v.(Factory)
+		return factory()
+	}
+	return nil
 }

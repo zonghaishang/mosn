@@ -15,28 +15,6 @@
  * limitations under the License.
  */
 
-package v2
+package proxywasm_0_1_0
 
-type WasmPluginConfig struct {
-	PluginName  string        `json:"plugin_name,omitempty"`
-	VmConfig    *WasmVmConfig `json:"vm_config,omitempty"`
-	InstanceNum int           `json:"instance_num,omitempty"`
-}
-
-type WasmVmConfig struct {
-	Engine string `json:"engine,omitempty"`
-	Path   string `json:"path,omitempty"`
-	Url    string `json:"url,omitempty"`
-	Cpu    int    `json:"cpu,omitempty"`
-	Mem    int    `json:"mem,omitempty"`
-}
-
-func (w WasmPluginConfig) Clone() WasmPluginConfig {
-	vmConfig := *w.VmConfig
-
-	return WasmPluginConfig{
-		PluginName:  w.PluginName,
-		VmConfig:    &vmConfig,
-		InstanceNum: w.InstanceNum,
-	}
-}
+// spec: https://github.com/proxy-wasm/spec/tree/master/abi-versions/vNEXT
