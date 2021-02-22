@@ -92,12 +92,12 @@ func (proto *dubboProtocol) Decode(ctx context.Context, data types.IoBuffer) (in
 }
 
 // heartbeater
-func (proto *dubboProtocol) Trigger(requestId uint64) xprotocol.XFrame {
+func (proto *dubboProtocol) Trigger(ctx context.Context, requestId uint64) xprotocol.XFrame {
 	// not support
 	return nil
 }
 
-func (proto *dubboProtocol) Reply(request xprotocol.XFrame) xprotocol.XRespFrame {
+func (proto *dubboProtocol) Reply(ctx context.Context, request xprotocol.XFrame) xprotocol.XRespFrame {
 	// TODO make readable
 	return &Frame{
 		Header: Header{
@@ -113,7 +113,7 @@ func (proto *dubboProtocol) Reply(request xprotocol.XFrame) xprotocol.XRespFrame
 
 // https://dubbo.apache.org/zh-cn/blog/dubbo-protocol.html
 // hijacker
-func (proto *dubboProtocol) Hijack(request xprotocol.XFrame, statusCode uint32) xprotocol.XRespFrame {
+func (proto *dubboProtocol) Hijack(ctx context.Context, request xprotocol.XFrame, statusCode uint32) xprotocol.XRespFrame {
 	dubboStatus, ok := dubboMosnStatusMap[int(statusCode)]
 	if !ok {
 		dubboStatus = dubboStatusInfo{
@@ -146,7 +146,7 @@ func (proto *dubboProtocol) PoolMode() types.PoolMode {
 	return types.Multiplex
 }
 
-func (proto *dubboProtocol) EnableWorkerPool() bool{
+func (proto *dubboProtocol) EnableWorkerPool() bool {
 	return true
 }
 

@@ -124,19 +124,19 @@ func (proto *boltv2Protocol) Decode(ctx context.Context, data types.IoBuffer) (i
 
 // heartbeater
 // boltv2 send bolt heartbeat
-func (proto *boltv2Protocol) Trigger(requestId uint64) xprotocol.XFrame {
+func (proto *boltv2Protocol) Trigger(ctx context.Context, requestId uint64) xprotocol.XFrame {
 	engine := xprotocol.GetProtocol(bolt.ProtocolName)
-	return engine.Trigger(requestId)
+	return engine.Trigger(ctx, requestId)
 }
 
 // boltv2 reply bolt heartbeat
-func (proto *boltv2Protocol) Reply(request xprotocol.XFrame) xprotocol.XRespFrame {
+func (proto *boltv2Protocol) Reply(ctx context.Context, request xprotocol.XFrame) xprotocol.XRespFrame {
 	engine := xprotocol.GetProtocol(bolt.ProtocolName)
-	return engine.Reply(request)
+	return engine.Reply(ctx, request)
 }
 
 // hijacker
-func (proto *boltv2Protocol) Hijack(request xprotocol.XFrame, statusCode uint32) xprotocol.XRespFrame {
+func (proto *boltv2Protocol) Hijack(ctx context.Context, request xprotocol.XFrame, statusCode uint32) xprotocol.XRespFrame {
 	return &Response{
 		ResponseHeader: ResponseHeader{
 			ResponseHeader: bolt.ResponseHeader{

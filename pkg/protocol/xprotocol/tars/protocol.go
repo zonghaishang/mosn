@@ -71,18 +71,18 @@ func (proto *tarsProtocol) Decode(ctx context.Context, data types.IoBuffer) (int
 }
 
 // heartbeater
-func (proto *tarsProtocol) Trigger(requestId uint64) xprotocol.XFrame {
+func (proto *tarsProtocol) Trigger(ctx context.Context, requestId uint64) xprotocol.XFrame {
 	// not support
 	return nil
 }
 
-func (proto *tarsProtocol) Reply(request xprotocol.XFrame) xprotocol.XRespFrame {
+func (proto *tarsProtocol) Reply(ctx context.Context, request xprotocol.XFrame) xprotocol.XRespFrame {
 	// not support
 	return nil
 }
 
 // hijacker
-func (proto *tarsProtocol) Hijack(request xprotocol.XFrame, statusCode uint32) xprotocol.XRespFrame {
+func (proto *tarsProtocol) Hijack(ctx context.Context, request xprotocol.XFrame, statusCode uint32) xprotocol.XRespFrame {
 	// not support
 	return nil
 }

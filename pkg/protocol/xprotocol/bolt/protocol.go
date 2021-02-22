@@ -122,7 +122,7 @@ func (proto *boltProtocol) Decode(ctx context.Context, data types.IoBuffer) (int
 }
 
 // Heartbeater
-func (proto *boltProtocol) Trigger(requestId uint64) xprotocol.XFrame {
+func (proto *boltProtocol) Trigger(ctx context.Context, requestId uint64) xprotocol.XFrame {
 	return &Request{
 		RequestHeader: RequestHeader{
 			Protocol:  ProtocolCode,
@@ -136,7 +136,7 @@ func (proto *boltProtocol) Trigger(requestId uint64) xprotocol.XFrame {
 	}
 }
 
-func (proto *boltProtocol) Reply(request xprotocol.XFrame) xprotocol.XRespFrame {
+func (proto *boltProtocol) Reply(ctx context.Context, request xprotocol.XFrame) xprotocol.XRespFrame {
 	return &Response{
 		ResponseHeader: ResponseHeader{
 			Protocol:       ProtocolCode,
@@ -151,7 +151,7 @@ func (proto *boltProtocol) Reply(request xprotocol.XFrame) xprotocol.XRespFrame 
 }
 
 // Hijacker
-func (proto *boltProtocol) Hijack(request xprotocol.XFrame, statusCode uint32) xprotocol.XRespFrame {
+func (proto *boltProtocol) Hijack(ctx context.Context, request xprotocol.XFrame, statusCode uint32) xprotocol.XRespFrame {
 	return &Response{
 		ResponseHeader: ResponseHeader{
 			Protocol:       ProtocolCode,
@@ -194,7 +194,7 @@ func (proto *boltProtocol) PoolMode() types.PoolMode {
 	return types.Multiplex
 }
 
-func (proto *boltProtocol) EnableWorkerPool() bool{
+func (proto *boltProtocol) EnableWorkerPool() bool {
 	return true
 }
 

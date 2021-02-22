@@ -27,26 +27,31 @@ func init() {
 }
 
 func abiImplFactory() abi.ABI {
-	return &abiImpl{}
+	return &AbiImpl{}
 }
 
-type abiImpl struct {
+// easy for extension
+type AbiImpl struct {
 	instance types.WasmInstance
 }
 
-func (a *abiImpl) SetInstance(instance types.WasmInstance) {
+func (a *AbiImpl) SetInstance(instance types.WasmInstance) {
 	a.instance = instance
 }
 
-func (a *abiImpl) OnStart(instance types.WasmInstance) {
+func (a *AbiImpl) GetInstance() types.WasmInstance {
+	return a.instance
+}
+
+func (a *AbiImpl) OnStart(instance types.WasmInstance) {
 	return
 }
 
-func (a *abiImpl) OnInstanceDestroy(instance types.WasmInstance) {
+func (a *AbiImpl) OnInstanceDestroy(instance types.WasmInstance) {
 	return
 }
 
-func (a *abiImpl) OnInstanceCreate(instance types.WasmInstance) {
+func (a *AbiImpl) OnInstanceCreate(instance types.WasmInstance) {
 	instance.RegisterFunc("env", "proxy_log", proxyLog)
 
 	instance.RegisterFunc("env", "proxy_set_effective_context", proxySetEffectiveContext)
@@ -54,8 +59,8 @@ func (a *abiImpl) OnInstanceCreate(instance types.WasmInstance) {
 	instance.RegisterFunc("env", "proxy_get_property", proxyGetProperty)
 	instance.RegisterFunc("env", "proxy_set_property", proxySetProperty)
 
-	instance.RegisterFunc("env", "proxy_get_buffer_bytes", proxyGetBufferBytes)
-	instance.RegisterFunc("env", "proxy_set_buffer_bytes", proxySetBufferBytes)
+	instance.RegisterFunc("env", "proxy_get_buffer_bytes", ProxyGetBufferBytes)
+	instance.RegisterFunc("env", "proxy_set_buffer_bytes", ProxySetBufferBytes)
 
 	instance.RegisterFunc("env", "proxy_get_header_map_pairs", proxyGetHeaderMapPairs)
 	instance.RegisterFunc("env", "proxy_set_header_map_pairs", proxySetHeaderMapPairs)

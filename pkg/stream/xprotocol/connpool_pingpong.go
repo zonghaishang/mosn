@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	atomicex "go.uber.org/atomic"
 	"mosn.io/api"
 	mosnctx "mosn.io/mosn/pkg/context"
 	"mosn.io/mosn/pkg/log"
@@ -30,7 +31,6 @@ import (
 	"mosn.io/mosn/pkg/protocol/xprotocol"
 	"mosn.io/mosn/pkg/stream"
 	"mosn.io/mosn/pkg/types"
-	atomicex "go.uber.org/atomic"
 )
 
 // poolPingPong is used for ping pong protocol such as http
@@ -222,7 +222,7 @@ func (p *poolPingPong) newActiveClient(ctx context.Context, subProtocol api.Prot
 		// protocol is from onNewDetectStream
 		// check heartbeat enable, hack: judge trigger result of Heartbeater
 		proto := xprotocol.GetProtocol(subProtocol)
-		if heartbeater, ok := proto.(xprotocol.Heartbeater); ok && heartbeater.Trigger(0) != nil {
+		if heartbeater, ok := proto.(xprotocol.Heartbeater); ok && heartbeater.Trigger(ctx, 0) != nil {
 			// create keepalive
 			rpcKeepAlive := NewKeepAlive(ac.codecClient, subProtocol, time.Second)
 			rpcKeepAlive.StartIdleTimeout()
