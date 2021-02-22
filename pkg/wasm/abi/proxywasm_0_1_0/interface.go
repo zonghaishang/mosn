@@ -87,7 +87,22 @@ func (d *DefaultInstanceCallback) GetPluginConfig() buffer.IoBuffer {
 }
 
 func (d *DefaultInstanceCallback) Log(level log.Level, msg string) {
-	return
+	logFunc := log.DefaultLogger.Infof
+	switch level {
+	case log.TRACE:
+		logFunc = log.DefaultLogger.Tracef
+	case log.DEBUG:
+		logFunc = log.DefaultLogger.Debugf
+	case log.INFO:
+		logFunc = log.DefaultLogger.Infof
+	case log.WARN:
+		logFunc = log.DefaultLogger.Warnf
+	case log.ERROR:
+		logFunc = log.DefaultLogger.Errorf
+	case log.FATAL:
+		logFunc = log.DefaultLogger.Fatalf
+	}
+	logFunc(msg)
 }
 
 func (d *DefaultInstanceCallback) GetHttpRequestHeader() api.HeaderMap {
