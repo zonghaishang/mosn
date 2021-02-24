@@ -49,6 +49,8 @@ const (
 	ContextKeyDownStreamHeaders
 	ContextKeyDownStreamRespHeaders
 	ContextKeyWasmContext
+	ContextKeyWasmSwitchContext
+	ContextKeyWasmExtension
 	ContextKeyEnd
 )
 
