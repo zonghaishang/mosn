@@ -82,7 +82,7 @@ func (a *AbiImpl) ProxyOnVmStart(rootContextId int32, vmConfigurationSize int32)
 	return res.(int32), nil
 }
 func (a *AbiImpl) ProxyOnDelete(contextId int32) error {
-	log.DefaultLogger.Debugf("[proxywasm_0_1_0][export] WasmerInstance ProxyOnDelete")
+	log.DefaultLogger.Infof("[proxywasm_0_1_0][export] WasmerInstance ProxyOnDelete, contextId: %v", contextId)
 
 	ff, err := a.instance.GetExportsFunc("proxy_on_delete")
 	if err != nil {
