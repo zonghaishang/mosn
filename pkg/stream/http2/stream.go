@@ -1037,14 +1037,13 @@ func (s *clientStream) AppendPing(context context.Context) {
 
 func (s *clientStream) endStream() {
 	// send header
-	s.sc.mutex.Lock()
 	_, err := s.sc.protocol.Encode(s.ctx, s.h2s)
 	if err == nil {
 		s.id = s.h2s.GetID()
+		s.sc.mutex.Lock()
 		s.sc.streams[s.id] = s
 		s.sc.mutex.Unlock()
 	} else {
-		s.sc.mutex.Unlock()
 		goto reset
 	}
 
