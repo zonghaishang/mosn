@@ -176,7 +176,7 @@ func newServerConnection(ctx context.Context, rawc net.Conn, stopChan chan struc
 		connected:        1,
 		readEnabledChan:  make(chan bool, 1),
 		internalStopChan: make(chan struct{}),
-		writeBufferChan:  make(chan *[]buffer.IoBuffer, 8),
+		writeBufferChan:  make(chan *[]buffer.IoBuffer, 32),
 		writeSchedChan:   make(chan bool, 1),
 		transferChan:     make(chan uint64),
 		network:          rawc.LocalAddr().Network(),
