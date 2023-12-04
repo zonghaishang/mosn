@@ -1108,7 +1108,7 @@ func newClientConnection(connectTimeout time.Duration, tlsMng types.TLSClientCon
 			readEnabled:      true,
 			readEnabledChan:  make(chan bool, 1),
 			internalStopChan: make(chan struct{}),
-			writeBufferChan:  make(chan *[]buffer.IoBuffer, 8),
+			writeBufferChan:  make(chan *[]buffer.IoBuffer, 32),
 			writeSchedChan:   make(chan bool, 1),
 			stats: &types.ConnectionStats{
 				ReadTotal:     metrics.NewCounter(),
