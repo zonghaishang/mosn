@@ -376,7 +376,7 @@ func (c *connection) attachEventLoop(lctx context.Context) {
 
 // this function must return false always, and return true just for test.
 func (c *connection) checkUseWriteLoop() bool {
-	return false
+	return true
 	/*
 		// if return false, and connection just use write directly.
 		// if return true, and connection remote address is loopback
