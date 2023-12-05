@@ -235,14 +235,14 @@ type MServerConn struct {
 	Framer *MFramer
 	api.Connection
 
-	flowCount atomic.Int32
+	flowCount atomic.Uint32
 }
 
 // NewserverConn returns a Http2 Server Connection
 func NewServerConn(conn api.Connection) *MServerConn {
 	sc := new(MServerConn)
 	sc.Connection = conn
-
+	sc.hs = new(http.Server) // verbose log panic
 	sc.cond = sync.NewCond(&sc.mu)
 
 	// init serverConn
@@ -1032,7 +1032,7 @@ type MClientConn struct {
 
 	onceInitFrame sync.Once
 
-	flowCount atomic.Int32
+	flowCount atomic.Uint32
 }
 
 // NewClientConn return Http2 Client conncetion
