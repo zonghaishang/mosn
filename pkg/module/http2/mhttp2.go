@@ -1623,7 +1623,7 @@ func (cc *MClientConn) processSettings(f *SettingsFrame) error {
 		switch s.ID {
 		case SettingMaxFrameSize:
 			cc.maxFrameSize = s.Val
-			cc.fr.SetMaxReadFrameSize(cc.maxFrameSize)
+			cc.Framer.SetMaxReadFrameSize(cc.maxFrameSize)
 			if VerboseLogs {
 				cc.vlogf("http2: client processing setting maxFrameSize %v", cc.maxFrameSize)
 			}
