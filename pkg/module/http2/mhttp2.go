@@ -268,7 +268,7 @@ func NewServerConn(conn api.Connection) *MServerConn {
 func (sc *MServerConn) Init() error {
 	settings := writeSettings{
 		{SettingMaxFrameSize, defaultMaxReadFrameSize},
-		{SettingMaxConcurrentStreams, defaultMaxStreams * 100},
+		{SettingMaxConcurrentStreams, defaultMaxStreams * 1000},
 		{SettingMaxHeaderListSize, http.DefaultMaxHeaderBytes},
 		{SettingInitialWindowSize, uint32(initialConnRecvWindowSize)},
 	}
@@ -375,15 +375,14 @@ func (sc *MServerConn) writeHeaders(w *writeResHeaders) error {
 		panic("unexpected empty hpack")
 	}
 
-	const maxFrameSize = 16384
-	//const maxFrameSize = 100
+	allowMaxFrameSize := int(sc.maxFrameSize)
 
 	first := true
 	var err error
 	for len(headerBlock) > 0 {
 		frag := headerBlock
-		if len(frag) > maxFrameSize {
-			frag = frag[:maxFrameSize]
+		if len(frag) > allowMaxFrameSize {
+			frag = frag[:allowMaxFrameSize]
 		}
 		headerBlock = headerBlock[len(frag):]
 		if first {
@@ -850,7 +849,37 @@ func (sc *MServerConn) processSettings(f *SettingsFrame) error {
 		}
 		return nil
 	}
-	if err := f.ForeachSetting(sc.processSetting); err != nil {
+	err := f.ForeachSetting(func(s Setting) error {
+		switch s.ID {
+		case SettingHeaderTableSize:
+			sc.headerTableSize = s.Val
+			sc.hpackEncoder.SetMaxDynamicTableSize(s.Val)
+		case SettingEnablePush:
+			sc.pushEnabled = s.Val != 0
+		case SettingMaxConcurrentStreams:
+			sc.clientMaxStreams = s.Val
+		case SettingInitialWindowSize:
+			return sc.processSettingInitialWindowSize(s.Val)
+		case SettingMaxFrameSize:
+			sc.maxFrameSize = int32(s.Val) // the maximum valid s.Val is < 2^31
+			sc.Framer.SetMaxReadFrameSize(uint32(sc.maxFrameSize))
+			if VerboseLogs {
+				sc.vlogf("http2: server processing setting maxFrameSize %v", sc.maxFrameSize)
+			}
+		case SettingMaxHeaderListSize:
+			sc.peerMaxHeaderListSize = s.Val
+		default:
+			// Unknown setting: "An endpoint that receives a SETTINGS
+			// frame with any unknown or unsupported identifier MUST
+			// ignore that setting."
+			if VerboseLogs {
+				sc.vlogf("http2: server ignoring unknown setting %v", s)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
 		return err
 	}
 	sc.cond.Broadcast()
@@ -1033,6 +1062,8 @@ func NewClientConn(conn api.Connection) *MClientConn {
 func (cc *MClientConn) WriteInitFrame() {
 	cc.onceInitFrame.Do(func() {
 		initialSettings := []Setting{
+			{SettingMaxFrameSize, defaultMaxReadFrameSize},
+			{SettingMaxConcurrentStreams, defaultMaxStreams * 1000},
 			{ID: SettingEnablePush, Val: 0},
 			{ID: SettingInitialWindowSize, Val: transportDefaultStreamFlow},
 		}
@@ -1592,6 +1623,10 @@ func (cc *MClientConn) processSettings(f *SettingsFrame) error {
 		switch s.ID {
 		case SettingMaxFrameSize:
 			cc.maxFrameSize = s.Val
+			cc.fr.SetMaxReadFrameSize(cc.maxFrameSize)
+			if VerboseLogs {
+				cc.vlogf("http2: client processing setting maxFrameSize %v", cc.maxFrameSize)
+			}
 		case SettingMaxConcurrentStreams:
 			cc.maxConcurrentStreams = s.Val
 		case SettingMaxHeaderListSize:
@@ -1613,6 +1648,11 @@ func (cc *MClientConn) processSettings(f *SettingsFrame) error {
 				cs.flow.add(delta)
 			}
 			cc.initialWindowSize = s.Val
+
+			if VerboseLogs {
+				cc.vlogf("http2: client processing setting initialWindowSize %v", cc.initialWindowSize)
+			}
+
 		default:
 		}
 		return nil
@@ -1780,8 +1820,7 @@ func (fr *MFramer) writeWindowUpdate(streamID, incr uint32) error {
 
 // WriteData writes Data Frame
 func (fr *MFramer) writeData(streamID uint32, endStream bool, data []byte) error {
-	const maxFrameSize = 16384
-	//const maxFrameSize = 100
+	allowMaxFrameSize := int(fr.maxReadSize)
 	var err error
 	if data == nil {
 		err = fr.sendData(streamID, endStream, nil)
@@ -1789,8 +1828,8 @@ func (fr *MFramer) writeData(streamID uint32, endStream bool, data []byte) error
 	}
 	for len(data) > 0 {
 		frag := data
-		if len(frag) > maxFrameSize {
-			frag = frag[:maxFrameSize]
+		if len(frag) > allowMaxFrameSize {
+			frag = frag[:allowMaxFrameSize]
 		}
 		data = data[len(frag):]
 		if len(data) > 0 {

@@ -1534,6 +1534,9 @@ func (sc *serverConn) processSetting(s Setting) error {
 		return sc.processSettingInitialWindowSize(s.Val)
 	case SettingMaxFrameSize:
 		sc.maxFrameSize = int32(s.Val) // the maximum valid s.Val is < 2^31
+		if VerboseLogs {
+			sc.vlogf("http2: server processing setting maxFrameSize %v", sc.maxFrameSize)
+		}
 	case SettingMaxHeaderListSize:
 		sc.peerMaxHeaderListSize = s.Val
 	default:
@@ -1560,6 +1563,11 @@ func (sc *serverConn) processSettingInitialWindowSize(val uint32) error {
 	// old value."
 	old := sc.initialStreamSendWindowSize
 	sc.initialStreamSendWindowSize = int32(val)
+
+	if VerboseLogs {
+		sc.vlogf("http2: server processing setting initialStreamSendWindowSize %v", sc.initialStreamSendWindowSize)
+	}
+
 	growth := int32(val) - old // may be negative
 	for _, st := range sc.streams {
 		if !st.flow.add(growth) {
@@ -2441,8 +2449,9 @@ func (rws *responseWriterState) writeChunk(p []byte) (n int, err error) {
 // prior to the headers being written. If the set of trailers is fixed
 // or known before the header is written, the normal Go trailers mechanism
 // is preferred:
-//    https://golang.org/pkg/net/http/#ResponseWriter
-//    https://golang.org/pkg/net/http/#example_ResponseWriter_trailers
+//
+//	https://golang.org/pkg/net/http/#ResponseWriter
+//	https://golang.org/pkg/net/http/#example_ResponseWriter_trailers
 const TrailerPrefix = "Trailer:"
 
 // promoteUndeclaredTrailers permits http.Handlers to set trailers
