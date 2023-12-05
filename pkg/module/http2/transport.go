@@ -2374,7 +2374,11 @@ func (cc *ClientConn) logf(format string, args ...interface{}) {
 }
 
 func (cc *ClientConn) vlogf(format string, args ...interface{}) {
-	cc.t.vlogf(format, args...)
+	//cc.t.vlogf(format, args...)
+	if VerboseLogs {
+		//t.logf(format, args...)
+		log.Printf(format, args...)
+	}
 }
 
 func (t *Transport) vlogf(format string, args ...interface{}) {

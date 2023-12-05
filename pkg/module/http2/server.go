@@ -610,11 +610,12 @@ func (sc *serverConn) vlogf(format string, args ...interface{}) {
 }
 
 func (sc *serverConn) logf(format string, args ...interface{}) {
-	if lg := sc.hs.ErrorLog; lg != nil {
-		lg.Printf(format, args...)
-	} else {
-		log.Printf(format, args...)
-	}
+	//if lg := sc.hs.ErrorLog; lg != nil {
+	//	lg.Printf(format, args...)
+	//} else {
+	//	log.Printf(format, args...)
+	//}
+	log.Printf(format, args...)
 }
 
 // errno returns v's underlying uintptr, else 0.
