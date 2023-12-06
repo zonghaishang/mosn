@@ -168,7 +168,7 @@ func (ms *MStream) awaitFlowControl(maxBytes int) (taken int32, err error) {
 			return take, nil
 		}
 		if VerboseLogs {
-			cc.vlogf("http2: stream awaitFlowControl: %v", cc.flowCount.Add(1))
+			cc.vlogf("http2: stream awaitFlowControl: %v", atomic.AddUint32(&cc.flowCount, 1))
 		}
 
 		cc.cond.Wait()
@@ -235,7 +235,7 @@ type MServerConn struct {
 	Framer *MFramer
 	api.Connection
 
-	flowCount atomic.Uint32
+	flowCount uint32
 }
 
 // NewserverConn returns a Http2 Server Connection
@@ -1032,7 +1032,7 @@ type MClientConn struct {
 
 	onceInitFrame sync.Once
 
-	flowCount atomic.Uint32
+	flowCount uint32
 }
 
 // NewClientConn return Http2 Client conncetion
@@ -1282,7 +1282,7 @@ func (cs *MClientStream) awaitFlowControl(maxBytes int) (taken int32, err error)
 		}
 
 		if VerboseLogs {
-			cc.vlogf("http2: client stream flow: %v", cc.flowCount.Add(1))
+			cc.vlogf("http2: client stream flow: %v", atomic.AddUint32(&cc.flowCount, 1))
 		}
 
 		cc.cond.Wait()
