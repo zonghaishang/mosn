@@ -46,7 +46,7 @@ import (
 // TODO: move it to main
 func init() {
 	protocol.RegisterProtocolConfigHandler(protocol.HTTP2, streamConfigHandler)
-	protocol.RegisterProtocol(protocol.HTTP2, NewConnPool, &StreamConnFactory{}, protocol.GetStatusCodeMapping{})
+	protocol.RegisterProtocol(protocol.HTTP2, NewConnMultiplexPool, &StreamConnFactory{}, protocol.GetStatusCodeMapping{})
 }
 
 type StreamConnFactory struct{}
