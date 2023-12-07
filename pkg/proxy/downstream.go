@@ -24,6 +24,7 @@ import (
 	"net"
 	nethttp "net/http"
 	"net/url"
+	"os"
 	"reflect"
 	"runtime/debug"
 	"strconv"
@@ -44,6 +45,16 @@ import (
 	"mosn.io/pkg/utils"
 	"mosn.io/pkg/variable"
 )
+
+var useSchedulePool = true
+
+func init() {
+	p := os.Getenv("USE_GLOBAL_SCHEDULE_POOL")
+	if p == "false" {
+		useSchedulePool = false
+		log.Proxy.Infof(context.Background(), "[proxy] [downstream] use global pool %t", useSchedulePool)
+	}
+}
 
 // types.StreamEventListener
 // types.StreamReceiveListener
@@ -425,10 +436,13 @@ func (s *downStream) OnReceive(ctx context.Context, headers types.HeaderMap, dat
 			s.proxy.workerpool.Schedule(task)
 		} else {
 			// use the global shared worker pool
-			// pool.ScheduleAuto(task)
-			utils.GoWithRecover(func() {
-				task()
-			}, nil)
+			if useSchedulePool {
+				pool.ScheduleAuto(task)
+			} else {
+				utils.GoWithRecover(func() {
+					task()
+				}, nil)
+			}
 		}
 		return
 	}

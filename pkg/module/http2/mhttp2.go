@@ -14,7 +14,9 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,7 +37,31 @@ var (
 	ErrDepStreamID = errDepStreamID
 	//todo: support configuration
 	initialConnRecvWindowSize = int32(1 << 30)
+
+	skipCompressHttp2Header = false
 )
+
+func init() {
+	skip := os.Getenv("SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE")
+	if skip == "true" {
+		skipCompressHttp2Header = true
+		log.DefaultLogger.Infof("[http2] ：skip compress http2 header")
+	}
+}
+
+var hpackPool = &sync.Pool{
+	New: func() interface{} {
+		buf := bytes.Buffer{}
+		return &encoder{
+			hbuf: &buf,
+			henc: hpack.NewEncoder(&buf),
+		}
+	}}
+
+type encoder struct {
+	hbuf *bytes.Buffer
+	henc *hpack.Encoder
+}
 
 // Mstream is Http2 Server stream
 type MStream struct {
@@ -101,7 +127,12 @@ func (ms *MStream) WriteHeader(end bool) error {
 	if endStream {
 		ms.conn.closeStream(ms.stream, nil)
 	}
-	return ms.conn.writeHeaders(ws)
+
+	if !skipCompressHttp2Header {
+		return ms.conn.writeHeaders(ws)
+	}
+
+	return ms.conn.writeHeadersLockFree(ws)
 }
 
 func (ms *MStream) WriteData() (err error) {
@@ -201,7 +232,11 @@ func (ms *MStream) WriteTrailers() error {
 			trailers:  trailers,
 			endStream: true,
 		}
-		err = ms.conn.writeHeaders(ws)
+		if !skipCompressHttp2Header {
+			err = ms.conn.writeHeaders(ws)
+		} else {
+			err = ms.conn.writeHeadersLockFree(ws)
+		}
 	} else {
 		err = ms.conn.Framer.writeData(ms.id, true, nil)
 
@@ -229,7 +264,7 @@ func (ms *MStream) SendResponse() error {
 
 type MServerConn struct {
 	serverConn
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	cond *sync.Cond
 
 	Framer *MFramer
@@ -295,8 +330,8 @@ func (sc *MServerConn) Init() error {
 }
 
 func (sc *MServerConn) getStream(id uint32) *stream {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
+	sc.mu.RUnlock()
+	defer sc.mu.RUnlock()
 	return sc.streams[id]
 }
 
@@ -392,14 +427,14 @@ func (sc *MServerConn) writeHeaders(w *writeResHeaders) error {
 		}
 		headerBlock = headerBlock[len(frag):]
 		if first {
-			err = sc.Framer.writeHeaders(HeadersFrameParam{
+			_, err = sc.Framer.writeHeaders(HeadersFrameParam{
 				StreamID:      w.streamID,
 				BlockFragment: frag,
 				EndStream:     w.endStream,
 				EndHeaders:    len(headerBlock) == 0,
-			})
+			}, true)
 		} else {
-			err = sc.Framer.writeContinuation(w.streamID, len(headerBlock) == 0, frag)
+			_, err = sc.Framer.writeContinuation(w.streamID, len(headerBlock) == 0, frag, true)
 		}
 		first = false
 		if err != nil {
@@ -407,6 +442,70 @@ func (sc *MServerConn) writeHeaders(w *writeResHeaders) error {
 		}
 	}
 	return nil
+}
+
+func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
+
+	coder := hpackPool.Get().(*encoder)
+	defer hpackPool.Put(coder)
+
+	coder.hbuf.Reset()
+
+	enc, buf := coder.henc, coder.hbuf
+
+	if w.httpResCode != 0 {
+		encKV(enc, ":status", httpCodeString(w.httpResCode))
+	}
+
+	encodeHeaders(enc, w.h, w.trailers)
+
+	if w.contentType != "" {
+		encKV(enc, "content-type", w.contentType)
+	}
+	if w.contentLength != "" {
+		encKV(enc, "content-length", w.contentLength)
+	}
+	if w.date != "" {
+		encKV(enc, "date", w.date)
+	}
+
+	headerBlock := buf.Bytes()
+	if len(headerBlock) == 0 && w.trailers == nil {
+		panic("unexpected empty hpack")
+	}
+
+	allowMaxFrameSize := int(sc.maxFrameSize)
+
+	first := true
+	var err error
+	var ioBuf buffer.IoBuffer
+	var buff = make([]buffer.IoBuffer, 2)
+	for len(headerBlock) > 0 {
+		frag := headerBlock
+		if len(frag) > allowMaxFrameSize {
+			frag = frag[:allowMaxFrameSize]
+		}
+		headerBlock = headerBlock[len(frag):]
+		if first {
+			ioBuf, err = sc.Framer.writeHeaders(HeadersFrameParam{
+				StreamID:      w.streamID,
+				BlockFragment: frag,
+				EndStream:     w.endStream,
+				EndHeaders:    len(headerBlock) == 0,
+			}, false)
+		} else {
+			ioBuf, err = sc.Framer.writeContinuation(w.streamID, len(headerBlock) == 0, frag, false)
+		}
+		first = false
+		if err != nil {
+			return err
+		}
+
+		buff = append(buff, ioBuf)
+	}
+
+	err = sc.Framer.Connection.Write(buff...)
+	return err
 }
 
 // HandleFrame is Http2 Server handles Frame
@@ -1025,8 +1124,6 @@ func (sc *MServerConn) goAway(code ErrCode, debugData []byte) {
 type MClientConn struct {
 	ClientConn
 
-	hmu sync.Mutex
-
 	Framer *MFramer
 	api.Connection
 
@@ -1097,26 +1194,179 @@ func (cc *MClientConn) WriteHeaders(ctx context.Context, req *http.Request, trai
 		return nil, err
 	}
 
-	// StreamId has to be sequential
-	cc.mu.Lock()
-	defer cc.mu.Unlock()
-
 	cs := cc.newStream()
 	cs.req = req
-	cc.hmu.Lock()
-	defer cc.hmu.Unlock()
-	hdrs, err := cc.encodeHeaders(req, false, trailers, req.ContentLength)
 
+	var hdrs []byte
+	var err error
+
+	if !skipCompressHttp2Header {
+		cc.mu.Lock()
+		hdrs, err = cc.ClientConn.encodeHeaders(req, false, trailers, req.ContentLength)
+		if err != nil {
+			cc.mu.Unlock()
+			return nil, err
+		}
+
+		err = cc.writeHeaders(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
+		if err != nil {
+			cc.mu.Unlock()
+			return nil, err
+		}
+		// avoid acquire lock again
+		cc.streams[cs.ID] = cs
+		cc.mu.Unlock()
+
+		return cs, nil
+	}
+
+	// lock free
+	hdrs, err = cc.encodeHeadersLockFree(req, false, trailers, req.ContentLength)
 	if err != nil {
 		return nil, err
 	}
-	err = cc.writeHeaders(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
+
+	err = cc.writeHeadersLockFree(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
 	if err != nil {
 		return nil, err
 	}
 
+	cc.mu.Lock()
 	cc.streams[cs.ID] = cs
+	cc.mu.Unlock()
+
 	return cs, nil
+}
+
+func (cc *MClientConn) encodeHeadersLockFree(req *http.Request, addGzipHeader bool, trailers string, contentLength int64) ([]byte, error) {
+
+	host := req.Host
+	if host == "" {
+		host = req.URL.Host
+	}
+	host, err := httpguts.PunycodeHostPort(host)
+	if err != nil {
+		return nil, err
+	}
+
+	var path string
+	if req.Method != "CONNECT" {
+		path = req.URL.RequestURI()
+		if !validPseudoPath(path) {
+			orig := path
+			path = strings.TrimPrefix(path, req.URL.Scheme+"://"+host)
+			if !validPseudoPath(path) {
+				if req.URL.Opaque != "" {
+					return nil, fmt.Errorf("invalid request :path %q from URL.Opaque = %q", orig, req.URL.Opaque)
+				} else {
+					return nil, fmt.Errorf("invalid request :path %q", orig)
+				}
+			}
+		}
+	}
+
+	// Check for any invalid headers and return an error before we
+	// potentially pollute our hpack state. (We want to be able to
+	// continue to reuse the hpack encoder for future requests)
+	for k, vv := range req.Header {
+		if !httpguts.ValidHeaderFieldName(k) {
+			return nil, fmt.Errorf("invalid HTTP header name %q", k)
+		}
+		for _, v := range vv {
+			if !httpguts.ValidHeaderFieldValue(v) {
+				return nil, fmt.Errorf("invalid HTTP header value %q for header %q", v, k)
+			}
+		}
+	}
+
+	enumerateHeaders := func(f func(name, value string)) {
+		// 8.1.2.3 Request Pseudo-Header Fields
+		// The :path pseudo-header field includes the path and query parts of the
+		// target URI (the path-absolute production and optionally a '?' character
+		// followed by the query production (see Sections 3.3 and 3.4 of
+		// [RFC3986]).
+		f(":authority", host)
+		f(":method", req.Method)
+		if req.Method != "CONNECT" {
+			f(":path", path)
+			f(":scheme", req.URL.Scheme)
+		}
+		if trailers != "" {
+			f("trailer", trailers)
+		}
+
+		var didUA bool
+		for k, vv := range req.Header {
+			if strings.EqualFold(k, "host") || strings.EqualFold(k, "content-length") {
+				// Host is :authority, already sent.
+				// Content-Length is automatic, set below.
+				continue
+			} else if strings.EqualFold(k, "connection") || strings.EqualFold(k, "proxy-connection") ||
+				strings.EqualFold(k, "transfer-encoding") || strings.EqualFold(k, "upgrade") ||
+				strings.EqualFold(k, "keep-alive") {
+				// Per 8.1.2.2 Connection-Specific Header
+				// Fields, don't send connection-specific
+				// fields. We have already checked if any
+				// are error-worthy so just ignore the rest.
+				continue
+			} else if strings.EqualFold(k, "user-agent") {
+				// Match Go's http1 behavior: at most one
+				// User-Agent. If set to nil or empty string,
+				// then omit it. Otherwise if not mentioned,
+				// include the default (below).
+				didUA = true
+				if len(vv) < 1 {
+					continue
+				}
+				vv = vv[:1]
+				if vv[0] == "" {
+					continue
+				}
+
+			}
+
+			for _, v := range vv {
+				f(k, v)
+			}
+		}
+		if shouldSendReqContentLength(req.Method, contentLength) {
+			f("content-length", strconv.FormatInt(contentLength, 10))
+		}
+		if addGzipHeader {
+			f("accept-encoding", "gzip")
+		}
+		if !didUA {
+			f("user-agent", defaultUserAgent)
+		}
+	}
+
+	enc := hpackPool.Get().(*encoder)
+	defer hpackPool.Put(enc)
+
+	enc.hbuf.Reset()
+
+	hbuf := enc.hbuf
+	henc := enc.henc
+
+	trace := httptrace.ContextClientTrace(req.Context())
+	traceHeaders := traceHasWroteHeaderField(trace)
+
+	hlSize := uint64(0)
+	enumerateHeaders(func(name, value string) {
+		hf := hpack.HeaderField{Name: name, Value: value, Sensitive: skipCompressHttp2Header}
+		hlSize += uint64(hf.Size())
+
+		_ = henc.WriteField(hf)
+		if traceHeaders {
+			traceWroteHeaderField(trace, name, value)
+		}
+	})
+
+	if hlSize > cc.peerMaxHeaderListSize {
+		return nil, errRequestHeaderListSize
+	}
+
+	return hbuf.Bytes(), nil
 }
 
 // MClientStream is Http2 Client Stream
@@ -1238,18 +1488,36 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 	} else {
 		cc.Request.Trailer = *cc.Trailer
 
-		cc.conn.hmu.Lock()
-		defer cc.conn.hmu.Unlock()
-		var trls []byte
-		trls, err = cc.conn.encodeTrailers(cc.Request)
-		if err != nil {
-			log.DefaultLogger.Errorf("[Stream H2] [Client] Encode trailer error: %v", err)
-			return
+		if !skipCompressHttp2Header {
+			cc.conn.mu.Lock()
+			var trls []byte
+			trls, err = cc.conn.encodeTrailers(cc.Request)
+			if err != nil {
+				cc.conn.mu.Unlock()
+				log.DefaultLogger.Errorf("[Stream H2] [Client] Encode trailer error: %v", err)
+				return
+			}
+			err = cc.conn.writeHeaders(cc.ID, true, int(cc.conn.maxFrameSize), trls)
+			if err != nil {
+				cc.conn.mu.Unlock()
+				return
+			}
+			cc.conn.mu.Unlock()
+		} else {
+
+			var trls []byte
+			trls, err = cc.conn.encodeTrailersLockFree(cc.Request)
+			if err != nil {
+				log.DefaultLogger.Errorf("[Stream H2] [Client] Encode trailer error: %v", err)
+				return
+			}
+			err = cc.conn.writeHeadersLockFree(cc.ID, true, int(cc.conn.maxFrameSize), trls)
+			if err != nil {
+				return
+			}
+
 		}
-		err = cc.conn.writeHeaders(cc.ID, true, int(cc.conn.maxFrameSize), trls)
-		if err != nil {
-			return
-		}
+
 	}
 	return
 }
@@ -1313,15 +1581,15 @@ func (cc *MClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSiz
 		hdrs = hdrs[len(chunk):]
 		endHeaders := len(hdrs) == 0
 		if first {
-			err = cc.Framer.writeHeaders(HeadersFrameParam{
+			_, err = cc.Framer.writeHeaders(HeadersFrameParam{
 				StreamID:      streamID,
 				BlockFragment: chunk,
 				EndStream:     endStream,
 				EndHeaders:    endHeaders,
-			})
+			}, true)
 			first = false
 		} else {
-			err = cc.Framer.writeContinuation(streamID, endHeaders, chunk)
+			_, err = cc.Framer.writeContinuation(streamID, endHeaders, chunk, true)
 		}
 
 		if err != nil {
@@ -1329,6 +1597,42 @@ func (cc *MClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSiz
 		}
 	}
 	return nil
+}
+
+func (cc *MClientConn) writeHeadersLockFree(streamID uint32, endStream bool, maxFrameSize int, hdrs []byte) error {
+	first := true // first frame written (HEADERS is first, then CONTINUATION)
+
+	var err error
+	var ioBuf buffer.IoBuffer
+	var buff = make([]buffer.IoBuffer, 2)
+	for len(hdrs) > 0 {
+		chunk := hdrs
+		if len(chunk) > maxFrameSize {
+			chunk = chunk[:maxFrameSize]
+		}
+		hdrs = hdrs[len(chunk):]
+		endHeaders := len(hdrs) == 0
+		if first {
+			ioBuf, err = cc.Framer.writeHeaders(HeadersFrameParam{
+				StreamID:      streamID,
+				BlockFragment: chunk,
+				EndStream:     endStream,
+				EndHeaders:    endHeaders,
+			}, false)
+			first = false
+		} else {
+			ioBuf, err = cc.Framer.writeContinuation(streamID, endHeaders, chunk, false)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		buff = append(buff, ioBuf)
+	}
+
+	err = cc.Framer.Connection.Write(buff...)
+	return err
 }
 
 // must lock
@@ -1342,7 +1646,12 @@ func (cc *MClientConn) newStream() *clientStream {
 	cs.inflow.add(transportDefaultStreamFlow)
 	cs.inflow.setConnFlow(&cc.inflow)
 	cs.done = make(chan struct{})
+
+	// StreamId has to be sequential
+	cc.mu.Lock()
 	cc.nextStreamID += 2
+	cc.mu.Unlock()
+
 	return cs
 }
 
@@ -1873,9 +2182,9 @@ func (fr *MFramer) sendData(streamID uint32, endStream bool, data []byte) error 
 }
 
 // WriteContinuation writes Continuation Frame
-func (fr *MFramer) writeContinuation(streamID uint32, endHeaders bool, headerBlockFragment []byte) error {
+func (fr *MFramer) writeContinuation(streamID uint32, endHeaders bool, headerBlockFragment []byte, conn bool) (buffer.IoBuffer, error) {
 	if !validStreamID(streamID) {
-		return errStreamID
+		return nil, errStreamID
 	}
 	var flags Flags
 	buf := buffer.NewIoBuffer(len(headerBlockFragment) + frameHeaderLen)
@@ -1884,13 +2193,14 @@ func (fr *MFramer) writeContinuation(streamID uint32, endHeaders bool, headerBlo
 	}
 	fr.startWrite(buf, FrameContinuation, flags, streamID)
 	buf.Write(headerBlockFragment)
-	return fr.endWrite(buf)
+	err := fr.endWriteConn(buf, conn)
+	return buf, err
 }
 
 // WriteHeaders writes headers Frame
-func (fr *MFramer) writeHeaders(p HeadersFrameParam) error {
+func (fr *MFramer) writeHeaders(p HeadersFrameParam, conn bool) (buffer.IoBuffer, error) {
 	if !validStreamID(p.StreamID) {
-		return errStreamID
+		return nil, errStreamID
 	}
 	var flags Flags
 	buf := buffer.GetIoBuffer(len(p.BlockFragment) + frameHeaderLen + 8)
@@ -1913,7 +2223,7 @@ func (fr *MFramer) writeHeaders(p HeadersFrameParam) error {
 	if !p.Priority.IsZero() {
 		v := p.Priority.StreamDep
 		if !validStreamIDOrZero(v) {
-			return errDepStreamID
+			return nil, errDepStreamID
 		}
 		if p.Priority.Exclusive {
 			v |= 1 << 31
@@ -1923,7 +2233,8 @@ func (fr *MFramer) writeHeaders(p HeadersFrameParam) error {
 	}
 	buf.Write(p.BlockFragment)
 	buf.Write(padZeros[:p.PadLength])
-	return fr.endWrite(buf)
+	err := fr.endWriteConn(buf, conn)
+	return buf, err
 }
 
 func (fr *MFramer) writeByte(b buffer.IoBuffer, v byte)     { b.Write([]byte{v}) }
@@ -1962,6 +2273,24 @@ func (fr *MFramer) endWrite(buf buffer.IoBuffer) error {
 	header[1] = byte(length >> 8)
 	header[2] = byte(length)
 	return fr.Connection.Write(buf)
+}
+
+func (fr *MFramer) endWriteConn(buf buffer.IoBuffer, conn bool) error {
+	// Now that we know the final size, fill in the FrameHeader in
+	// the space previously reserved for it. Abuse append.
+	length := buf.Len() - frameHeaderLen
+	if length >= (1 << 24) {
+		return ErrFrameTooLarge
+	}
+	header := buf.Bytes()
+	header[0] = byte(length >> 16)
+	header[1] = byte(length >> 8)
+	header[2] = byte(length)
+	if conn {
+		return fr.Connection.Write(buf)
+	}
+
+	return nil
 }
 
 func (fr *MFramer) readFrameHeader(ctx context.Context, data buffer.IoBuffer, off int) (FrameHeader, error) {
