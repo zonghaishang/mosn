@@ -218,10 +218,10 @@ func (s *downStream) endStream() {
 
 // Clean up on the very end of the stream: end stream or reset stream
 // Resources to clean up / reset:
-// 	+ upstream request
-// 	+ all timers
-// 	+ all filters
-//  + remove stream in proxy context
+//   - upstream request
+//   - all timers
+//   - all filters
+//   - remove stream in proxy context
 func (s *downStream) cleanStream() {
 	if !atomic.CompareAndSwapUint32(&s.downstreamCleaned, 0, 1) {
 		return
@@ -425,7 +425,10 @@ func (s *downStream) OnReceive(ctx context.Context, headers types.HeaderMap, dat
 			s.proxy.workerpool.Schedule(task)
 		} else {
 			// use the global shared worker pool
-			pool.ScheduleAuto(task)
+			// pool.ScheduleAuto(task)
+			utils.GoWithRecover(func() {
+				task()
+			}, nil)
 		}
 		return
 	}
