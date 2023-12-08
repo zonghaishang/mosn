@@ -330,7 +330,7 @@ func (sc *MServerConn) Init() error {
 }
 
 func (sc *MServerConn) getStream(id uint32) *stream {
-	sc.mu.RUnlock()
+	sc.mu.RLock()
 	defer sc.mu.RUnlock()
 	return sc.streams[id]
 }
