@@ -196,6 +196,13 @@ func encKV(enc *hpack.Encoder, k, v string) {
 	enc.WriteField(hpack.HeaderField{Name: k, Value: v})
 }
 
+func encKV2(enc *hpack.Encoder, k, v string, sensitive bool) {
+	if VerboseLogs {
+		log.Printf("http2: server encoding header %q = %q", k, v)
+	}
+	enc.WriteField(hpack.HeaderField{Name: k, Value: v, Sensitive: sensitive})
+}
+
 func (w *writeResHeaders) staysWithinBuffer(max int) bool {
 	// TODO: this is a common one. It'd be nice to return true
 	// here and get into the fast path if we could be clever and
@@ -215,7 +222,7 @@ func (w *writeResHeaders) writeFrame(ctx writeContext) error {
 		encKV(enc, ":status", httpCodeString(w.httpResCode))
 	}
 
-	encodeHeaders(enc, w.h, w.trailers)
+	encodeHeaders(enc, w.h, w.trailers, false)
 
 	if w.contentType != "" {
 		encKV(enc, "content-type", w.contentType)
@@ -274,7 +281,7 @@ func (w *writePushPromise) writeFrame(ctx writeContext) error {
 	encKV(enc, ":scheme", w.url.Scheme)
 	encKV(enc, ":authority", w.url.Host)
 	encKV(enc, ":path", w.url.RequestURI())
-	encodeHeaders(enc, w.h, nil)
+	encodeHeaders(enc, w.h, nil, false)
 
 	headerBlock := buf.Bytes()
 	if len(headerBlock) == 0 {
@@ -331,7 +338,7 @@ func (wu writeWindowUpdate) writeFrame(ctx writeContext) error {
 
 // encodeHeaders encodes an http.Header. If keys is not nil, then (k, h[k])
 // is encoded only if k is in keys.
-func encodeHeaders(enc *hpack.Encoder, h http.Header, keys []string) {
+func encodeHeaders(enc *hpack.Encoder, h http.Header, keys []string, sensitive bool) {
 	if keys == nil {
 		sorter := sorterPool.Get().(*sorter)
 		// Using defer here, since the returned keys from the
@@ -360,7 +367,7 @@ func encodeHeaders(enc *hpack.Encoder, h http.Header, keys []string) {
 			if isTE && v != "trailers" {
 				continue
 			}
-			encKV(enc, k, v)
+			encKV2(enc, k, v, sensitive)
 		}
 	}
 }

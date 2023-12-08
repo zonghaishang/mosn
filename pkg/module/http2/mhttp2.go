@@ -399,7 +399,7 @@ func (sc *MServerConn) writeHeaders(w *writeResHeaders) error {
 		encKV(enc, ":status", httpCodeString(w.httpResCode))
 	}
 
-	encodeHeaders(enc, w.h, w.trailers)
+	encodeHeaders(enc, w.h, w.trailers, false)
 
 	if w.contentType != "" {
 		encKV(enc, "content-type", w.contentType)
@@ -454,19 +454,19 @@ func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
 	enc, buf := coder.henc, coder.hbuf
 
 	if w.httpResCode != 0 {
-		encKV(enc, ":status", httpCodeString(w.httpResCode))
+		encKV2(enc, ":status", httpCodeString(w.httpResCode), true)
 	}
 
-	encodeHeaders(enc, w.h, w.trailers)
+	encodeHeaders(enc, w.h, w.trailers, true)
 
 	if w.contentType != "" {
-		encKV(enc, "content-type", w.contentType)
+		encKV2(enc, "content-type", w.contentType, true)
 	}
 	if w.contentLength != "" {
-		encKV(enc, "content-length", w.contentLength)
+		encKV2(enc, "content-length", w.contentLength, true)
 	}
 	if w.date != "" {
-		encKV(enc, "date", w.date)
+		encKV2(enc, "date", w.date, true)
 	}
 
 	headerBlock := buf.Bytes()
