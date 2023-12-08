@@ -285,7 +285,7 @@ func NewServerConn(conn api.Connection) *MServerConn {
 	sc.flow.add(initialWindowSize)
 	sc.inflow.add(initialWindowSize)
 
-	sc.advMaxStreams = defaultMaxStreams * 100
+	sc.advMaxStreams = defaultMaxStreams * 1000
 	sc.streams = make(map[uint32]*stream)
 	sc.clientMaxStreams = math.MaxUint32
 	sc.initialStreamSendWindowSize = initialWindowSize
