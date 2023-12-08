@@ -709,8 +709,9 @@ func (sc *MServerConn) processRequest(st *stream, f *MetaHeadersFrame) (*http.Re
 		return nil, streamError(f.StreamID, ErrCodeProtocol)
 	}
 
-	rp.header = make(http.Header)
-	for _, hf := range f.RegularFields() {
+	fields := f.RegularFields()
+	rp.header = make(http.Header, len(fields))
+	for _, hf := range fields {
 		rp.header.Add(sc.canonicalHeader(hf.Name), hf.Value)
 	}
 	if rp.authority == "" {
@@ -1353,6 +1354,13 @@ func (cc *MClientConn) encodeHeadersLockFree(req *http.Request, addGzipHeader bo
 
 	hlSize := uint64(0)
 	enumerateHeaders(func(name, value string) {
+		// rfc: https://datatracker.ietf.org/doc/html/rfc7540#section-8.1.2
+		//  Just as in HTTP/1.x, header field names are strings of ASCII
+		//   characters that are compared in a case-insensitive fashion.  However,
+		//   header field names MUST be converted to lowercase prior to their
+		//   encoding in HTTP/2.
+		name = strings.ToLower(name)
+
 		hf := hpack.HeaderField{Name: name, Value: value, Sensitive: skipCompressHttp2Header}
 		hlSize += uint64(hf.Size())
 
@@ -1750,8 +1758,9 @@ func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 			return nil, nil, false, ConnectionError(ErrCodeProtocol)
 		}
 
-		trailer := make(http.Header)
-		for _, hf := range f.RegularFields() {
+		fields := f.RegularFields()
+		trailer := make(http.Header, len(fields))
+		for _, hf := range fields {
 			key := http.CanonicalHeaderKey(hf.Name)
 			trailer[key] = append(trailer[key], hf.Value)
 		}
