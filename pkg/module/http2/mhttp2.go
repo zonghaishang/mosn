@@ -479,7 +479,7 @@ func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
 	first := true
 	var err error
 	var ioBuf buffer.IoBuffer
-	var buff = make([]buffer.IoBuffer, 2)
+	var buff = make([]buffer.IoBuffer, 0, 2)
 	for len(headerBlock) > 0 {
 		frag := headerBlock
 		if len(frag) > allowMaxFrameSize {
@@ -1612,7 +1612,7 @@ func (cc *MClientConn) writeHeadersLockFree(streamID uint32, endStream bool, max
 
 	var err error
 	var ioBuf buffer.IoBuffer
-	var buff = make([]buffer.IoBuffer, 2)
+	var buff = make([]buffer.IoBuffer, 0, 2)
 	for len(hdrs) > 0 {
 		chunk := hdrs
 		if len(chunk) > maxFrameSize {
@@ -2319,6 +2319,7 @@ func (fr *MFramer) readFrameHeader(ctx context.Context, data buffer.IoBuffer, of
 func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buffer.IoBuffer, off int) (*MetaHeadersFrame, int, error) {
 	mh := &MetaHeadersFrame{
 		HeadersFrame: hf,
+		Fields:       make([]hpack.HeaderField, 0, 8),
 	}
 
 	var hc headersOrContinuation = hf
