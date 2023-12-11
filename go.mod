@@ -112,7 +112,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.20.11 // indirect
 	github.com/shurcooL/sanitized_anchor_name v1.0.0 // indirect
 	github.com/tetratelabs/wazero v1.0.0-pre.3.0.20221122114515-b8d985462e20 // indirect
-	github.com/uber/jaeger-lib v2.4.0+incompatible // indirect
+	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
 	github.com/ugorji/go/codec v1.1.7 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/wasmerio/wasmer-go v1.0.4 // indirect
@@ -126,13 +126,5 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	vimagination.zapto.org/memio v0.0.0-20200222190306-588ebc67b97d // indirect
-)
-
-replace github.com/envoyproxy/go-control-plane => github.com/envoyproxy/go-control-plane v0.10.0
-
-replace istio.io/api => istio.io/api v0.0.0-20211103171850-665ed2b92d52
-
-replace (
-	mosn.io/pkg => github.com/zonghaishang/pkg v0.0.0-20231211092038-7c8fd3e137d4
+	vimagination.zapto.org/memio v1.0.0 // indirect
 )
