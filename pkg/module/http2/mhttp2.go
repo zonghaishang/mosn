@@ -470,7 +470,7 @@ func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
 	}
 
 	data := buf.Len()
-	writes := make([]byte, 0, data)
+	writes := make([]byte, data)
 	copy(writes, buf.Bytes()[:data])
 
 	headerBlock := writes
@@ -1384,7 +1384,7 @@ func (cc *MClientConn) encodeHeadersLockFree(req *http.Request, addGzipHeader bo
 	}
 
 	data := hbuf.Len()
-	writes := make([]byte, 0, data)
+	writes := make([]byte, data)
 	// write is async loop, we must copy data
 	copy(writes, hbuf.Bytes()[:data])
 
