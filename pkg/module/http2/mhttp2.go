@@ -469,7 +469,11 @@ func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
 		encKV2(enc, "date", w.date, true)
 	}
 
-	headerBlock := buf.Bytes()
+	data := buf.Len()
+	writes := make([]byte, 0, data)
+	copy(writes, buf.Bytes()[:data])
+
+	headerBlock := writes
 	if len(headerBlock) == 0 && w.trailers == nil {
 		panic("unexpected empty hpack")
 	}
@@ -1232,7 +1236,7 @@ func (cc *MClientConn) WriteHeaders(ctx context.Context, req *http.Request, trai
 	cs := cc.newStream()
 	cs.req = req
 
-	err = cc.writeHeaders(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
+	err = cc.writeHeadersLockFree(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
 	if err != nil {
 		cc.mu.Unlock()
 		return nil, err
@@ -1379,7 +1383,12 @@ func (cc *MClientConn) encodeHeadersLockFree(req *http.Request, addGzipHeader bo
 		return nil, errRequestHeaderListSize
 	}
 
-	return hbuf.Bytes(), nil
+	data := hbuf.Len()
+	writes := make([]byte, 0, data)
+	// write is async loop, we must copy data
+	copy(writes, hbuf.Bytes()[:data])
+
+	return writes, nil
 }
 
 // MClientStream is Http2 Client Stream
@@ -2326,7 +2335,7 @@ func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buf
 	}
 
 	var hc headersOrContinuation = hf
-	frag := make([][]byte, 1)
+	frag := make([][]byte, 0, 1)
 	msize := 0
 	for {
 		frag = append(frag, hc.HeaderBlockFragment())
