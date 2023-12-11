@@ -1195,14 +1195,15 @@ func (cc *MClientConn) WriteHeaders(ctx context.Context, req *http.Request, trai
 		return nil, err
 	}
 
-	cs := cc.newStream()
-	cs.req = req
-
 	var hdrs []byte
 	var err error
 
 	if !skipCompressHttp2Header {
 		cc.mu.Lock()
+
+		cs := cc.newStream()
+		cs.req = req
+
 		hdrs, err = cc.ClientConn.encodeHeaders(req, false, trailers, req.ContentLength)
 		if err != nil {
 			cc.mu.Unlock()
@@ -1227,12 +1228,16 @@ func (cc *MClientConn) WriteHeaders(ctx context.Context, req *http.Request, trai
 		return nil, err
 	}
 
-	err = cc.writeHeadersLockFree(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
+	cc.mu.Lock()
+	cs := cc.newStream()
+	cs.req = req
+
+	err = cc.writeHeaders(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
 	if err != nil {
+		cc.mu.Unlock()
 		return nil, err
 	}
 
-	cc.mu.Lock()
 	cc.streams[cs.ID] = cs
 	cc.mu.Unlock()
 
@@ -1656,9 +1661,7 @@ func (cc *MClientConn) newStream() *clientStream {
 	cs.done = make(chan struct{})
 
 	// StreamId has to be sequential
-	cc.mu.Lock()
 	cc.nextStreamID += 2
-	cc.mu.Unlock()
 
 	return cs
 }
