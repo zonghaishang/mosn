@@ -58,6 +58,12 @@ var hpackPool = &sync.Pool{
 		}
 	}}
 
+//var hpackField = &sync.Pool{
+//	New: func() interface{} {
+//		return make([]hpack.HeaderField, 0, 8)
+//	},
+//}
+
 type encoder struct {
 	hbuf *bytes.Buffer
 	henc *hpack.Encoder
@@ -2329,6 +2335,10 @@ func (fr *MFramer) readFrameHeader(ctx context.Context, data buffer.IoBuffer, of
 }
 
 func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buffer.IoBuffer, off int) (*MetaHeadersFrame, int, error) {
+
+	//fields := hpackField.Get()
+	//fields = fields[:0]
+
 	mh := &MetaHeadersFrame{
 		HeadersFrame: hf,
 		Fields:       make([]hpack.HeaderField, 0, 8),

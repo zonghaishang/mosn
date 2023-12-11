@@ -1506,6 +1506,9 @@ func (s *downStream) giveStream() {
 		}
 	}
 
+	// Give index variable first
+	variable.GiveIndexVariables(s.context)
+
 	// Give buffers to bufferPool
 	if ctx := buffer.PoolContext(s.context); ctx != nil {
 		ctx.Give()
