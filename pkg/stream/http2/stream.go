@@ -256,7 +256,7 @@ func (conn *serverStreamConnection) OnEvent(event api.ConnectionEvent) {
 func (conn *serverStreamConnection) Dispatch(buf types.IoBuffer) {
 	for {
 		// 1. pre alloc stream-level ctx with bufferCtx
-		ctx := conn.cm.Get()
+		ctx := context.Background()
 
 		// 2. decode process
 		frame, err := conn.protocol.Decode(ctx, buf)
@@ -271,8 +271,6 @@ func (conn *serverStreamConnection) Dispatch(buf types.IoBuffer) {
 		if err != nil {
 			break
 		}
-
-		conn.cm.Next()
 	}
 }
 
@@ -332,8 +330,11 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 	var stream *serverStream
 	// header
 	if h2s != nil {
-		// Check: context need clone?
-		stream, err = conn.onNewStreamDetect(ctx, h2s, endStream)
+		// allocate stream level context
+		conn.cm.Next()
+
+		sc := conn.cm.Get()
+		stream, err = conn.onNewStreamDetect(sc, h2s, endStream)
 		if err != nil {
 			conn.handleError(ctx, f, err)
 			return
@@ -423,18 +424,6 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 		}
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
 			log.Proxy.Debugf(stream.ctx, "http2 server stream end %d", id)
-		}
-	}
-
-	// Reuse the context of the http2 header
-	// Otherwise, a large amount of memory allocation is triggered
-	if stream != nil && stream.ctx != ctx {
-		// Give index variable first
-		variable.GiveIndexVariables(ctx)
-
-		// Give buffers to bufferPool
-		if cc := buffer.PoolContext(ctx); cc != nil {
-			cc.Give()
 		}
 	}
 
@@ -704,7 +693,8 @@ func (conn *clientStreamConnection) OnEvent(event api.ConnectionEvent) {
 func (conn *clientStreamConnection) Dispatch(buf types.IoBuffer) {
 	for {
 		// 1. pre alloc stream-level ctx with bufferCtx
-		ctx := conn.cm.Get()
+		// ctx := conn.cm.Get()
+		ctx := context.Background()
 
 		// 2. decode process
 		frame, err := conn.protocol.Decode(ctx, buf)
@@ -720,7 +710,6 @@ func (conn *clientStreamConnection) Dispatch(buf types.IoBuffer) {
 			break
 		}
 
-		conn.cm.Next()
 	}
 }
 
@@ -890,18 +879,6 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 		conn.mutex.Lock()
 		delete(conn.streams, id)
 		conn.mutex.Unlock()
-	}
-
-	// Reuse the context of the http2 header
-	// Otherwise, a large amount of memory allocation is triggered
-	if stream != nil && stream.ctx != ctx {
-		// Give index variable first
-		variable.GiveIndexVariables(ctx)
-
-		// Give buffers to bufferPool
-		if cc := buffer.PoolContext(ctx); cc != nil {
-			cc.Give()
-		}
 	}
 
 	return
