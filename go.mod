@@ -128,3 +128,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	vimagination.zapto.org/memio v1.0.0 // indirect
 )
+
+replace (
+	mosn.io/pkg => github.com/zonghaishang/pkg v0.0.0-20231211092038-7c8fd3e137d4
+)

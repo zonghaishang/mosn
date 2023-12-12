@@ -266,15 +266,13 @@ func (conn *serverStreamConnection) Dispatch(buf types.IoBuffer) {
 		}
 
 		// Do handle staff. Error would also be passed to this function.
-		end := conn.handleFrame(ctx, frame, err)
+		conn.handleFrame(ctx, frame, err)
 
 		if err != nil {
 			break
 		}
 
-		if end {
-			conn.cm.Next()
-		}
+		conn.cm.Next()
 	}
 }
 
@@ -308,11 +306,11 @@ func (conn *serverStreamConnection) Reset(reason types.StreamResetReason) {
 	}
 }
 
-func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface{}, err error) bool {
+func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface{}, err error) {
 	f, _ := i.(http2.Frame)
 	if err != nil {
 		conn.handleError(ctx, f, err)
-		return true
+		return
 	}
 	var h2s *http2.MStream
 	var endStream, hasTrailer bool
@@ -322,11 +320,11 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 
 	if err != nil {
 		conn.handleError(ctx, f, err)
-		return true
+		return
 	}
 
 	if h2s == nil && data == nil && !hasTrailer && !endStream {
-		return true
+		return
 	}
 
 	id := f.Header().StreamID
@@ -338,7 +336,7 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 		stream, err = conn.onNewStreamDetect(ctx, h2s, endStream)
 		if err != nil {
 			conn.handleError(ctx, f, err)
-			return true
+			return
 		}
 		header := mhttp2.NewReqHeader(h2s.Request)
 
@@ -366,7 +364,7 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 
 		if endStream {
 			stream.receiver.OnReceive(stream.ctx, header, nil, nil)
-			return endStream
+			return
 		}
 		stream.header = header
 		stream.trailer = &mhttp2.HeaderMap{}
@@ -376,7 +374,7 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 		stream = conn.onStreamRecv(ctx, id, endStream)
 		if stream == nil {
 			log.Proxy.Errorf(ctx, "http2 server OnStreamRecv error, invalid id = %d", id)
-			return true
+			return
 		}
 	}
 
@@ -403,7 +401,7 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 				Code:     http2.ErrCodeCancel,
 				Cause:    err,
 			})
-			return true
+			return
 		}
 	}
 
@@ -428,7 +426,19 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 		}
 	}
 
-	return endStream
+	// Reuse the context of the http2 header
+	// Otherwise, a large amount of memory allocation is triggered
+	if stream != nil && stream.ctx != ctx {
+		// Give index variable first
+		variable.GiveIndexVariables(ctx)
+
+		// Give buffers to bufferPool
+		if cc := buffer.PoolContext(ctx); cc != nil {
+			cc.Give()
+		}
+	}
+
+	return
 
 }
 
@@ -704,15 +714,13 @@ func (conn *clientStreamConnection) Dispatch(buf types.IoBuffer) {
 		}
 
 		// Do handle staff. Error would also be passed to this function.
-		end := conn.handleFrame(ctx, frame, err)
+		conn.handleFrame(ctx, frame, err)
 
 		if err != nil {
 			break
 		}
 
-		if end {
-			conn.cm.Next()
-		}
+		conn.cm.Next()
 	}
 }
 
@@ -763,11 +771,11 @@ func (conn *clientStreamConnection) NewStream(ctx context.Context, receiver type
 	return stream
 }
 
-func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface{}, err error) bool {
+func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface{}, err error) {
 	f, _ := i.(http2.Frame)
 	if err != nil {
 		conn.handleError(ctx, f, err)
-		return true
+		return
 	}
 	var endStream bool
 	var data []byte
@@ -779,11 +787,11 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 
 	if err != nil {
 		conn.handleError(ctx, f, err)
-		return true
+		return
 	}
 
 	if rsp == nil && trailer == nil && data == nil && !endStream && lastStream == 0 {
-		return true
+		return
 	}
 
 	if lastStream != 0 {
@@ -792,7 +800,7 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 		if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
 			log.DefaultLogger.Debugf("http2 client receive goaway lastStreamID = %d", conn.lastStream)
 		}
-		return true
+		return
 	}
 
 	id := f.Header().StreamID
@@ -803,7 +811,7 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 
 	if stream == nil {
 		log.Proxy.Errorf(ctx, "http2 client invalid steamID :%v", f)
-		return true
+		return
 	}
 
 	if rsp != nil {
@@ -820,7 +828,7 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 
 		if endStream {
 			if stream.receiver == nil {
-				return true
+				return
 			}
 
 			stream.receiver.OnReceive(stream.ctx, header, nil, nil)
@@ -828,7 +836,7 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 			delete(conn.streams, id)
 			conn.mutex.Unlock()
 
-			return true
+			return
 		}
 		stream.header = header
 		stream.trailer = &mhttp2.HeaderMap{}
@@ -884,7 +892,19 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 		conn.mutex.Unlock()
 	}
 
-	return endStream
+	// Reuse the context of the http2 header
+	// Otherwise, a large amount of memory allocation is triggered
+	if stream != nil && stream.ctx != ctx {
+		// Give index variable first
+		variable.GiveIndexVariables(ctx)
+
+		// Give buffers to bufferPool
+		if cc := buffer.PoolContext(ctx); cc != nil {
+			cc.Give()
+		}
+	}
+
+	return
 }
 
 func (conn *clientStreamConnection) handleError(ctx context.Context, f http2.Frame, err error) {
