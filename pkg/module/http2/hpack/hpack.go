@@ -260,7 +260,7 @@ func (d *Decoder) Write(p []byte) (n int, err error) {
 
 	for len(d.buf) > 0 {
 		err = d.parseHeaderFieldRepr()
-		if err == errNeedMore {
+		if err == ErrNeedMore {
 			// Extra paranoia, making sure saveBuf won't
 			// get too large. All the varint and string
 			// reading code earlier should already catch
@@ -281,10 +281,10 @@ func (d *Decoder) Write(p []byte) (n int, err error) {
 	return len(p), err
 }
 
-// errNeedMore is an internal sentinel error value that means the
+// ErrNeedMore is an internal sentinel error value that means the
 // buffer is truncated and we need to read more data before we can
 // continue parsing.
-var errNeedMore = errors.New("need more data")
+var ErrNeedMore = errors.New("need more data")
 
 type indexType int
 
@@ -297,7 +297,7 @@ const (
 func (v indexType) indexed() bool   { return v == indexedTrue }
 func (v indexType) sensitive() bool { return v == indexedNever }
 
-// returns errNeedMore if there isn't enough data available.
+// returns ErrNeedMore if there isn't enough data available.
 // any other error is fatal.
 // consumes d.buf iff it returns nil.
 // precondition: must be called with len(d.buf) > 0
@@ -425,13 +425,13 @@ var errVarintOverflow = DecodingError{errors.New("varint integer overflow")}
 // n must always be between 1 and 8.
 //
 // The returned remain buffer is either a smaller suffix of p, or err != nil.
-// The error is errNeedMore if p doesn't contain a complete integer.
+// The error is ErrNeedMore if p doesn't contain a complete integer.
 func readVarInt(n byte, p []byte) (i uint64, remain []byte, err error) {
 	if n < 1 || n > 8 {
 		panic("bad n")
 	}
 	if len(p) == 0 {
-		return 0, p, errNeedMore
+		return 0, p, ErrNeedMore
 	}
 	i = uint64(p[0])
 	if n < 8 {
@@ -456,7 +456,7 @@ func readVarInt(n byte, p []byte) (i uint64, remain []byte, err error) {
 			return 0, origP, errVarintOverflow
 		}
 	}
-	return 0, origP, errNeedMore
+	return 0, origP, ErrNeedMore
 }
 
 // readString decodes an hpack string from p.
@@ -469,7 +469,7 @@ func readVarInt(n byte, p []byte) (i uint64, remain []byte, err error) {
 // won't affect the decoding state.
 func (d *Decoder) readString(p []byte, wantStr bool) (s string, remain []byte, err error) {
 	if len(p) == 0 {
-		return "", p, errNeedMore
+		return "", p, ErrNeedMore
 	}
 	isHuff := p[0]&128 != 0
 	strLen, p, err := readVarInt(7, p)
@@ -480,7 +480,7 @@ func (d *Decoder) readString(p []byte, wantStr bool) (s string, remain []byte, e
 		return "", nil, ErrStringLength
 	}
 	if uint64(len(p)) < strLen {
-		return "", p, errNeedMore
+		return "", p, ErrNeedMore
 	}
 	if !isHuff {
 		if wantStr {

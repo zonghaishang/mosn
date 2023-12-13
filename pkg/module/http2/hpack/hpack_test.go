@@ -625,14 +625,14 @@ func TestReadVarInt(t *testing.T) {
 		{8, []byte{254}, res{254, 1, nil}},
 
 		// Doesn't fit in a byte:
-		{1, []byte{1}, res{0, 0, errNeedMore}},
-		{2, []byte{3}, res{0, 0, errNeedMore}},
-		{3, []byte{7}, res{0, 0, errNeedMore}},
-		{4, []byte{15}, res{0, 0, errNeedMore}},
-		{5, []byte{31}, res{0, 0, errNeedMore}},
-		{6, []byte{63}, res{0, 0, errNeedMore}},
-		{7, []byte{127}, res{0, 0, errNeedMore}},
-		{8, []byte{255}, res{0, 0, errNeedMore}},
+		{1, []byte{1}, res{0, 0, ErrNeedMore}},
+		{2, []byte{3}, res{0, 0, ErrNeedMore}},
+		{3, []byte{7}, res{0, 0, ErrNeedMore}},
+		{4, []byte{15}, res{0, 0, ErrNeedMore}},
+		{5, []byte{31}, res{0, 0, ErrNeedMore}},
+		{6, []byte{63}, res{0, 0, ErrNeedMore}},
+		{7, []byte{127}, res{0, 0, ErrNeedMore}},
+		{8, []byte{255}, res{0, 0, ErrNeedMore}},
 
 		// Ignoring top bits:
 		{5, []byte{255, 154, 10}, res{1337, 3, nil}}, // high dummy three bits: 111
@@ -643,7 +643,7 @@ func TestReadVarInt(t *testing.T) {
 		{5, []byte{191, 154, 10, 2}, res{1337, 3, nil}}, // extra byte
 
 		// Short a byte:
-		{5, []byte{191, 154}, res{0, 0, errNeedMore}},
+		{5, []byte{191, 154}, res{0, 0, ErrNeedMore}},
 
 		// integer overflow:
 		{1, []byte{255, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128}, res{0, 0, errVarintOverflow}},

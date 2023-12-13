@@ -925,7 +925,7 @@ func (s *clientStream) AppendHeaders(ctx context.Context, headersIn api.HeaderMa
 	var isReqHeader bool
 
 	// clone for retry
-	headersIn = headersIn.Clone()
+	//headersIn = headersIn.Clone()
 	switch header := headersIn.(type) {
 	case *mhttp2.ReqHeader:
 		req = header.Req

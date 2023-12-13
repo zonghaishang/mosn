@@ -2403,7 +2403,7 @@ func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buf
 	defer hdec.SetEmitFunc(func(hf hpack.HeaderField) {})
 
 	for _, f := range frag {
-		if _, err := hdec.Write(f); err != nil {
+		if _, err := hdec.Write(f); err != nil && !errors.Is(err, hpack.ErrNeedMore) {
 			return nil, 0, ConnectionError(ErrCodeCompression)
 		}
 	}
