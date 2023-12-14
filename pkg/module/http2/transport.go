@@ -272,6 +272,7 @@ type clientStream struct {
 
 	trailer    http.Header  // accumulated trailers
 	resTrailer *http.Header // client's Response.Trailer
+	decodeBuf  []byte       // only valid SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
 }
 
 // awaitRequestCancel waits for the user to cancel a request or for the done

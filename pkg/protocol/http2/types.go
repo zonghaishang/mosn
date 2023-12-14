@@ -18,6 +18,7 @@
 package http2
 
 import (
+	"mosn.io/mosn/pkg/module/http2"
 	"net/http"
 	"strings"
 
@@ -31,12 +32,18 @@ type HeaderMap struct {
 
 type ReqHeader struct {
 	*HeaderMap
-	Req *http.Request
+	//Req *http.Request
+	Wrap *http2.RequestWrapper
+}
+
+type TrailerHeader struct {
+	HeaderMap
+	Buf []byte // don't clone
 }
 
 type RspHeader struct {
 	*HeaderMap
-	Rsp *http.Response
+	Wrap *http2.ResponseWrapper
 }
 
 func NewHeaderMap(header http.Header) *HeaderMap {
@@ -47,15 +54,29 @@ func NewHeaderMap(header http.Header) *HeaderMap {
 
 func NewReqHeader(req *http.Request) *ReqHeader {
 	h := new(ReqHeader)
-	h.Req = req
-	h.HeaderMap = NewHeaderMap(h.Req.Header)
+	h.Wrap = &http2.RequestWrapper{Req: req}
+	h.HeaderMap = NewHeaderMap(req.Header)
+	return h
+}
+
+func NewReqWrapHeader(req *http2.RequestWrapper) *ReqHeader {
+	h := new(ReqHeader)
+	h.Wrap = req
+	h.HeaderMap = NewHeaderMap(req.Req.Header)
 	return h
 }
 
 func NewRspHeader(rsp *http.Response) *RspHeader {
 	h := new(RspHeader)
-	h.Rsp = rsp
-	h.HeaderMap = NewHeaderMap(h.Rsp.Header)
+	h.Wrap = &http2.ResponseWrapper{Rsp: rsp}
+	h.HeaderMap = NewHeaderMap(rsp.Header)
+	return h
+}
+
+func NewRspWrapHeader(rsp *http2.ResponseWrapper) *RspHeader {
+	h := new(RspHeader)
+	h.Wrap = rsp
+	h.HeaderMap = NewHeaderMap(rsp.Rsp.Header)
 	return h
 }
 
@@ -101,9 +122,10 @@ func (h *HeaderMap) Clone() types.HeaderMap {
 func (h *ReqHeader) Clone() types.HeaderMap {
 	h2 := new(ReqHeader)
 	h2.HeaderMap = h.HeaderMap.Clone().(*HeaderMap)
-	h2.Req = new(http.Request)
-	*h2.Req = *h.Req
-	h2.Req.Header = h2.HeaderMap.H
+
+	h2.Wrap = &http2.RequestWrapper{Req: new(http.Request)}
+	*h2.Wrap.Req = *h.Wrap.Req
+	h2.Wrap.Req.Header = h2.HeaderMap.H
 	return h2
 }
 
@@ -111,11 +133,11 @@ func (h *ReqHeader) Get(key string) (string, bool) {
 	if len(key) > 0 && key[0] == ':' {
 		switch key {
 		case ":authority":
-			return h.Req.Host, true
+			return h.Wrap.Req.Host, true
 		case ":path":
-			return h.Req.RequestURI, true
+			return h.Wrap.Req.RequestURI, true
 		case ":method":
-			return h.Req.Method, true
+			return h.Wrap.Req.Method, true
 		default:
 			return "", false
 		}
@@ -126,9 +148,10 @@ func (h *ReqHeader) Get(key string) (string, bool) {
 func (h *RspHeader) Clone() types.HeaderMap {
 	h2 := new(RspHeader)
 	h2.HeaderMap = h.HeaderMap.Clone().(*HeaderMap)
-	h2.Rsp = new(http.Response)
-	*h2.Rsp = *h.Rsp
-	h2.Rsp.Header = h2.HeaderMap.H
+
+	h2.Wrap = &http2.ResponseWrapper{Rsp: new(http.Response)}
+	*h2.Wrap.Rsp = *h.Wrap.Rsp
+	h2.Wrap.Rsp.Header = h2.HeaderMap.H
 	return h2
 }
 

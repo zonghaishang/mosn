@@ -339,28 +339,30 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 			conn.handleError(ctx, f, err)
 			return
 		}
-		header := mhttp2.NewReqHeader(h2s.Request)
+
+		header := mhttp2.NewReqWrapHeader(h2s.Request)
 
 		scheme := "http"
 		if _, ok := conn.conn.RawConn().(*mtls.TLSConn); ok {
 			scheme = "https"
 		}
 
-		h2s.Request.URL.Scheme = strings.ToLower(scheme)
+		req := h2s.Request.Req
+		req.URL.Scheme = strings.ToLower(scheme)
 
 		variable.SetString(ctx, types.VarScheme, scheme)
-		variable.SetString(ctx, types.VarMethod, h2s.Request.Method)
-		variable.SetString(ctx, types.VarHost, h2s.Request.Host)
-		variable.SetString(ctx, types.VarIstioHeaderHost, h2s.Request.Host) // be consistent with http1
-		variable.SetString(ctx, types.VarPath, h2s.Request.URL.Path)
-		variable.SetString(ctx, types.VarPathOriginal, h2s.Request.URL.EscapedPath())
+		variable.SetString(ctx, types.VarMethod, req.Method)
+		variable.SetString(ctx, types.VarHost, req.Host)
+		variable.SetString(ctx, types.VarIstioHeaderHost, req.Host) // be consistent with http1
+		variable.SetString(ctx, types.VarPath, req.URL.Path)
+		variable.SetString(ctx, types.VarPathOriginal, req.URL.EscapedPath())
 
-		if h2s.Request.URL.RawQuery != "" {
-			variable.SetString(ctx, types.VarQueryString, h2s.Request.URL.RawQuery)
+		if req.URL.RawQuery != "" {
+			variable.SetString(ctx, types.VarQueryString, req.URL.RawQuery)
 		}
 
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
-			log.Proxy.Debugf(stream.ctx, "http2 server header: %d, %+v", id, h2s.Request.Header)
+			log.Proxy.Debugf(stream.ctx, "http2 server header: %d, %+v", id, req.Header)
 		}
 
 		if endStream {
@@ -384,7 +386,6 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
 			log.Proxy.Debugf(ctx, "http2 server receive data: %d", id)
 		}
-
 		if stream.recData == nil {
 			if endStream || !conn.useStream {
 				stream.recData = buffer.GetIoBuffer(len(data))
@@ -407,9 +408,10 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 	}
 
 	if hasTrailer {
-		stream.trailer.H = stream.h2s.Request.Trailer
+		stream.trailer.H = stream.h2s.Request.Req.Trailer
+
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
-			log.Proxy.Debugf(stream.ctx, "http2 server trailer: %d, %v", id, stream.h2s.Request.Trailer)
+			log.Proxy.Debugf(stream.ctx, "http2 server trailer: %d, %v", id, stream.h2s.Request.Req.Trailer)
 		}
 	}
 
@@ -515,7 +517,7 @@ func (s *serverStream) AppendHeaders(ctx context.Context, headers api.HeaderMap,
 			s.respUseStream = h2UseStream
 		}
 	}
-	var rsp *http.Response
+	var wrap *http2.ResponseWrapper
 
 	var status int
 
@@ -528,23 +530,23 @@ func (s *serverStream) AppendHeaders(ctx context.Context, headers api.HeaderMap,
 
 	switch header := headers.(type) {
 	case *mhttp2.RspHeader:
-		rsp = header.Rsp
+		wrap = header.Wrap
 	case *mhttp2.ReqHeader:
 		// indicates the invocation is under hijack scene
-		rsp = new(http.Response)
-		rsp.StatusCode = status
-		rsp.Header = s.h2s.Request.Header
+		wrap = &http2.ResponseWrapper{Rsp: new(http.Response)}
+		wrap.Rsp.StatusCode = status
+		wrap.Rsp.Header = s.h2s.Request.Req.Header
 	default:
-		rsp = new(http.Response)
-		rsp.StatusCode = status
-		rsp.Header = mhttp2.EncodeHeader(headers)
+		wrap = &http2.ResponseWrapper{Rsp: new(http.Response)}
+		wrap.Rsp.StatusCode = status
+		wrap.Rsp.Header = mhttp2.EncodeHeader(headers)
 	}
 
-	s.h2s.Response = rsp
+	s.h2s.Response = wrap
 	s.h2s.UseStream = s.respUseStream
 
 	if log.Proxy.GetLogLevel() >= log.DEBUG {
-		log.Proxy.Debugf(s.ctx, "http2 server ApppendHeaders id = %d, headers = %+v", s.id, rsp.Header)
+		log.Proxy.Debugf(s.ctx, "http2 server ApppendHeaders id = %d, headers = %+v", s.id, wrap.Rsp.Header)
 	}
 
 	if endStream {
@@ -607,7 +609,7 @@ func (s *serverStream) endStream() {
 		// Need to reset the 'Content-Length' response header when it's a direct response.
 		isDirectResponse, _ := variable.GetString(s.ctx, types.VarProxyIsDirectResponse)
 		if isDirectResponse == types.IsDirectResponse {
-			s.h2s.Response.Header.Set("Content-Length", strconv.Itoa(s.h2s.SendData.Len()))
+			s.h2s.Response.Rsp.Header.Set("Content-Length", strconv.Itoa(s.h2s.SendData.Len()))
 		}
 	}
 
@@ -769,17 +771,17 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 	var endStream bool
 	var data []byte
 	var trailer http.Header
-	var rsp *http.Response
+	var wrap *http2.ResponseWrapper
 	var lastStream uint32
 
-	rsp, data, trailer, endStream, lastStream, err = conn.mClientConn.HandleFrame(ctx, f)
+	wrap, data, trailer, endStream, lastStream, err = conn.mClientConn.HandleFrame(ctx, f)
 
 	if err != nil {
 		conn.handleError(ctx, f, err)
 		return
 	}
 
-	if rsp == nil && trailer == nil && data == nil && !endStream && lastStream == 0 {
+	if wrap == nil && trailer == nil && data == nil && !endStream && lastStream == 0 {
 		return
 	}
 
@@ -803,16 +805,16 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 		return
 	}
 
-	if rsp != nil {
-		header := mhttp2.NewRspHeader(rsp)
+	if wrap != nil {
+		header := mhttp2.NewRspWrapHeader(wrap)
 
 		// set header-status into stream ctx
-		variable.SetString(stream.ctx, types.VarHeaderStatus, strconv.Itoa(rsp.StatusCode))
+		variable.SetString(stream.ctx, types.VarHeaderStatus, strconv.Itoa(wrap.Rsp.StatusCode))
 
 		buffer.TransmitBufferPoolContext(stream.ctx, ctx)
 
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
-			log.Proxy.Debugf(stream.ctx, "http2 client header: id = %d, headers = %+v", id, rsp.Header)
+			log.Proxy.Debugf(stream.ctx, "http2 client header: id = %d, headers = %+v", id, wrap.Rsp.Header)
 		}
 
 		if endStream {
@@ -925,11 +927,13 @@ func (s *clientStream) AppendHeaders(ctx context.Context, headersIn api.HeaderMa
 	var isReqHeader bool
 
 	// clone for retry
-	//headersIn = headersIn.Clone()
+	headersIn = headersIn.Clone()
+	var decoded []byte
 	switch header := headersIn.(type) {
 	case *mhttp2.ReqHeader:
-		req = header.Req
+		req = header.Wrap.Req
 		isReqHeader = true
+		decoded = header.Wrap.Buf
 	default:
 		req = new(http.Request)
 	}
@@ -991,7 +995,7 @@ func (s *clientStream) AppendHeaders(ctx context.Context, headersIn api.HeaderMa
 		log.Proxy.Debugf(s.ctx, "http2 client AppendHeaders: id = %d, headers = %+v", s.id, req.Header)
 	}
 
-	s.h2s = http2.NewMClientStream(s.sc.mClientConn, req)
+	s.h2s = http2.NewMClientStream(s.sc.mClientConn, req, decoded)
 	s.h2s.UseStream = s.reqUseStream
 
 	if endStream {

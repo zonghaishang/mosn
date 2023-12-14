@@ -74,11 +74,15 @@ type MStream struct {
 	*stream
 	sentContentLen int64
 	conn           *MServerConn
-	Request        *http.Request
-	Response       *http.Response
-	Trailer        *http.Header
-	SendData       buffer.IoBuffer
-	UseStream      bool
+	//Request        *http.Request
+	//RequestRawData []byte // only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
+	Request  *RequestWrapper
+	Response *ResponseWrapper
+	Trailer  *http.Header
+	//TrailerRawData []byte // only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
+	//Trailer   *TrailerWrapper
+	SendData  buffer.IoBuffer
+	UseStream bool
 }
 
 // ID returns stream id
@@ -89,17 +93,17 @@ func (ms *MStream) ID() uint32 {
 // SendResponse is Http2 Server send response
 func (ms *MStream) WriteHeader(end bool) error {
 	rsp := ms.Response
-	endStream := end || ms.Request.Method == "HEAD"
+	endStream := end || ms.Request.Req.Method == "HEAD"
 
-	isHeadResp := ms.Request.Method == "HEAD"
+	isHeadResp := ms.Request.Req.Method == "HEAD"
 	var ctype, clen string
 	var dataLen int
 	if ms.SendData != nil {
 		dataLen = ms.SendData.Len()
 	}
 
-	if clen = rsp.Header.Get("Content-Length"); clen != "" {
-		rsp.Header.Del("Content-Length")
+	if clen = rsp.Rsp.Header.Get("Content-Length"); clen != "" {
+		rsp.Rsp.Header.Del("Content-Length")
 		clen64, err := strconv.ParseInt(clen, 10, 64)
 		if err == nil && clen64 >= 0 {
 			ms.sentContentLen = clen64
@@ -108,27 +112,28 @@ func (ms *MStream) WriteHeader(end bool) error {
 		}
 	}
 
-	if dataLen == 0 || isHeadResp || !bodyAllowedForStatus(rsp.StatusCode) {
+	if dataLen == 0 || isHeadResp || !bodyAllowedForStatus(rsp.Rsp.StatusCode) {
 		clen = "0"
 	}
 
-	hasContentType := rsp.Header.Get("Content-Type")
-	if hasContentType == "" && bodyAllowedForStatus(rsp.StatusCode) && dataLen > 0 {
+	hasContentType := rsp.Rsp.Header.Get("Content-Type")
+	if hasContentType == "" && bodyAllowedForStatus(rsp.Rsp.StatusCode) && dataLen > 0 {
 		ctype = http.DetectContentType(ms.SendData.Bytes())
 	}
 	var date string
-	if ok := rsp.Header.Get("Date"); ok == "" {
+	if ok := rsp.Rsp.Header.Get("Date"); ok == "" {
 		date = time.Now().UTC().Format(http.TimeFormat)
 	}
 
 	ws := &writeResHeaders{
 		streamID:      ms.id,
-		httpResCode:   rsp.StatusCode,
-		h:             rsp.Header,
+		httpResCode:   rsp.Rsp.StatusCode,
+		h:             rsp.Rsp.Header,
 		endStream:     endStream,
 		contentLength: clen,
 		contentType:   ctype,
 		date:          date,
+		decodeBuf:     rsp.Buf,
 	}
 	if endStream {
 		ms.conn.closeStream(ms.stream, nil)
@@ -452,6 +457,11 @@ func (sc *MServerConn) writeHeaders(w *writeResHeaders) error {
 
 func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
 
+	if len(w.decodeBuf) > 0 {
+		err := sc.Framer.Connection.Write(buffer.NewIoBufferBytes(w.decodeBuf))
+		return err
+	}
+
 	coder := hpackPool.Get().(*encoder)
 	defer hpackPool.Put(coder)
 
@@ -653,7 +663,11 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 	}
 	st.declBodyBytes = req.ContentLength
 
-	ms.Request = req
+	ms.Request = &RequestWrapper{Req: req}
+	if f.headerFragBuf != nil {
+		ms.Request.Buf = f.headerFragBuf
+	}
+
 	return ms, false, f.StreamEnded(), nil
 }
 
@@ -679,9 +693,15 @@ func (st *stream) mprocessTrailerHeaders(ctx context.Context, f *MetaHeadersFram
 			}
 			st.trailer[key] = append(st.trailer[key], hf.Value)
 		}
+
+		if f.headerFragBuf != nil {
+			st.trailerBuf = f.headerFragBuf
+		}
 	}
+
 	st.copyTrailersToHandlerRequest()
 	st.state = stateHalfClosedRemote
+
 	return nil
 }
 
@@ -1200,8 +1220,8 @@ func (cc *MClientConn) WriteInitFrame() {
 }
 
 // WriteHeaders wirtes Headers Frame for Http2 Client
-func (cc *MClientConn) WriteHeaders(ctx context.Context, req *http.Request, trailers string, endStream bool) (*clientStream, error) {
-	if err := checkConnHeaders(req); err != nil {
+func (cc *MClientConn) WriteHeaders(ctx context.Context, req *RequestWrapper, trailers string, endStream bool) (*clientStream, error) {
+	if err := checkConnHeaders(req.Req); err != nil {
 		return nil, err
 	}
 
@@ -1212,9 +1232,9 @@ func (cc *MClientConn) WriteHeaders(ctx context.Context, req *http.Request, trai
 		cc.mu.Lock()
 
 		cs := cc.newStream()
-		cs.req = req
+		cs.req = req.Req
 
-		hdrs, err = cc.ClientConn.encodeHeaders(req, false, trailers, req.ContentLength)
+		hdrs, err = cc.ClientConn.encodeHeaders(req.Req, false, trailers, req.Req.ContentLength)
 		if err != nil {
 			cc.mu.Unlock()
 			return nil, err
@@ -1233,14 +1253,14 @@ func (cc *MClientConn) WriteHeaders(ctx context.Context, req *http.Request, trai
 	}
 
 	// lock free
-	hdrs, err = cc.encodeHeadersLockFree(req, false, trailers, req.ContentLength)
+	hdrs, err = cc.encodeHeadersLockFree(req, false, trailers, req.Req.ContentLength)
 	if err != nil {
 		return nil, err
 	}
 
 	cc.mu.Lock()
 	cs := cc.newStream()
-	cs.req = req
+	cs.req = req.Req
 
 	err = cc.writeHeadersLockFree(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
 	if err != nil {
@@ -1254,7 +1274,14 @@ func (cc *MClientConn) WriteHeaders(ctx context.Context, req *http.Request, trai
 	return cs, nil
 }
 
-func (cc *MClientConn) encodeHeadersLockFree(req *http.Request, addGzipHeader bool, trailers string, contentLength int64) ([]byte, error) {
+func (cc *MClientConn) encodeHeadersLockFree(wrap *RequestWrapper, addGzipHeader bool, trailers string, contentLength int64) ([]byte, error) {
+
+	// fast write header decoded buff
+	if len(wrap.Buf) > 0 {
+		return wrap.Buf, nil
+	}
+
+	req := wrap.Req
 
 	host := req.Host
 	if host == "" {
@@ -1397,21 +1424,39 @@ func (cc *MClientConn) encodeHeadersLockFree(req *http.Request, addGzipHeader bo
 	return writes, nil
 }
 
+type RequestWrapper struct {
+	Req *http.Request
+	Buf []byte // don't clone
+}
+
+type ResponseWrapper struct {
+	Rsp *http.Response
+	Buf []byte // don't clone
+}
+
+//type TrailerWrapper struct {
+//	Trailer *http.Header
+//	Buf     []byte // don't clone
+//}
+
 // MClientStream is Http2 Client Stream
 type MClientStream struct {
 	*clientStream
 	conn       *MClientConn
-	Request    *http.Request
+	Request    *RequestWrapper
 	SendData   buffer.IoBuffer
 	Trailer    *http.Header
 	UseStream  bool
 	sendHeader bool
 }
 
-func NewMClientStream(conn *MClientConn, req *http.Request) *MClientStream {
+func NewMClientStream(conn *MClientConn, req *http.Request, buf []byte) *MClientStream {
 	return &MClientStream{
-		conn:    conn,
-		Request: req,
+		conn: conn,
+		Request: &RequestWrapper{
+			Req: req,
+			Buf: buf,
+		},
 	}
 }
 
@@ -1425,8 +1470,8 @@ func (cc *MClientStream) RoundTrip(ctx context.Context) (err error) {
 	if !cc.sendHeader {
 		cc.sendHeader = true
 		//write header
-		if cl, ok := cc.Request.Header["Content-Length"]; ok {
-			cc.Request.ContentLength, _ = strconv.ParseInt(cl[0], 10, 64)
+		if cl, ok := cc.Request.Req.Header["Content-Length"]; ok {
+			cc.Request.Req.ContentLength, _ = strconv.ParseInt(cl[0], 10, 64)
 		}
 
 		endStream := cc.SendData == nil && cc.Trailer == nil
@@ -1514,12 +1559,12 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 			return
 		}
 	} else {
-		cc.Request.Trailer = *cc.Trailer
+		cc.Request.Req.Trailer = *cc.Trailer
 
 		if !skipCompressHttp2Header {
 			cc.conn.mu.Lock()
 			var trls []byte
-			trls, err = cc.conn.encodeTrailers(cc.Request)
+			trls, err = cc.conn.encodeTrailers(cc.Request.Req)
 			if err != nil {
 				cc.conn.mu.Unlock()
 				log.DefaultLogger.Errorf("[Stream H2] [Client] Encode trailer error: %v", err)
@@ -1534,7 +1579,7 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 		} else {
 
 			var trls []byte
-			trls, err = cc.conn.encodeTrailersLockFree(cc.Request)
+			trls, err = cc.conn.encodeTrailersLockFree(cc.Request.Req)
 			if err != nil {
 				log.DefaultLogger.Errorf("[Stream H2] [Client] Encode trailer error: %v", err)
 				return
@@ -1699,12 +1744,12 @@ func (cc *MClientConn) HandleError(ctx context.Context, streamId uint32, err err
 }
 
 // HandlerFrame handles Frame for Http2 Client
-func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*http.Response, []byte, http.Header, bool, uint32, error) {
+func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*ResponseWrapper, []byte, http.Header, bool, uint32, error) {
 	var err error
 	var data []byte
 	var endStream bool
 	var trailer http.Header
-	var rsp *http.Response
+	var rsp *ResponseWrapper
 	var lastStream uint32
 
 	switch f := f.(type) {
@@ -1749,7 +1794,7 @@ func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*http.Response
 }
 
 // processHeaders processes headers Frame for Http2 Client
-func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*http.Response, http.Header, bool, error) {
+func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*ResponseWrapper, http.Header, bool, error) {
 	cs := cc.streamByID(f.StreamID, f.StreamEnded())
 	if cs == nil {
 		return nil, nil, false, nil
@@ -1782,6 +1827,11 @@ func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 			key := http.CanonicalHeaderKey(hf.Name)
 			trailer[key] = append(trailer[key], hf.Value)
 		}
+
+		if f.headerFragBuf != nil {
+			cs.decodeBuf = f.headerFragBuf
+		}
+
 		return nil, trailer, true, nil
 	}
 
@@ -1791,7 +1841,7 @@ func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 }
 
 // handleResponse returns http.Response
-func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*http.Response, error) {
+func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*ResponseWrapper, error) {
 	if f.Truncated {
 		return nil, errResponseHeaderListSize
 	}
@@ -1806,20 +1856,22 @@ func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*h
 	}
 
 	header := make(http.Header)
-	res := &http.Response{
-		Proto:      "HTTP/2.0",
-		ProtoMajor: 2,
-		Header:     header,
-		StatusCode: statusCode,
-		Status:     status + " " + http.StatusText(statusCode),
+	wrap := &ResponseWrapper{
+		Rsp: &http.Response{
+			Proto:      "HTTP/2.0",
+			ProtoMajor: 2,
+			Header:     header,
+			StatusCode: statusCode,
+			Status:     status + " " + http.StatusText(statusCode),
+		}, Buf: f.headerFragBuf,
 	}
 	for _, hf := range f.RegularFields() {
 		key := http.CanonicalHeaderKey(hf.Name)
 		if key == "Trailer" {
-			t := res.Trailer
+			t := wrap.Rsp.Trailer
 			if t == nil {
 				t = make(http.Header)
-				res.Trailer = t
+				wrap.Rsp.Trailer = t
 			}
 			foreachHeaderElement(hf.Value, func(v string) {
 				t[http.CanonicalHeaderKey(v)] = nil
@@ -1832,10 +1884,10 @@ func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*h
 	streamEnded := f.StreamEnded()
 	isHead := cs.req.Method == "HEAD"
 	if !streamEnded || isHead {
-		res.ContentLength = -1
-		if clens := res.Header["Content-Length"]; len(clens) == 1 {
+		wrap.Rsp.ContentLength = -1
+		if clens := wrap.Rsp.Header["Content-Length"]; len(clens) == 1 {
 			if clen64, err := strconv.ParseInt(clens[0], 10, 64); err == nil {
-				res.ContentLength = clen64
+				wrap.Rsp.ContentLength = clen64
 			} else {
 				// TODO: care? unlike http/1, it won't mess up our framing, so it's
 				// more safe smuggling-wise to ignore.
@@ -1846,7 +1898,7 @@ func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*h
 		}
 	}
 
-	return res, nil
+	return wrap, nil
 }
 
 // processData processes Data Frame for Http2 Client
@@ -2336,9 +2388,6 @@ func (fr *MFramer) readFrameHeader(ctx context.Context, data buffer.IoBuffer, of
 
 func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buffer.IoBuffer, off int) (*MetaHeadersFrame, int, error) {
 
-	//fields := hpackField.Get()
-	//fields = fields[:0]
-
 	mh := &MetaHeadersFrame{
 		HeadersFrame: hf,
 		Fields:       make([]hpack.HeaderField, 0, 8),
@@ -2403,18 +2452,31 @@ func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buf
 	// Lose reference to MetaHeadersFrame:
 	defer hdec.SetEmitFunc(func(hf hpack.HeaderField) {})
 
-	// The packet is forwarded directly to upstream
-	frames := make([]byte, 0, tsize)
-	for _, f := range frag {
-		frames = append(frames, f...)
-	}
+	if !skipCompressHttp2Header {
+		for _, f := range frag {
+			if _, err := hdec.Write(f); err != nil {
+				if _, err := hdec.Write(f); err != nil && !errors.Is(err, hpack.ErrNeedMore) {
+					return nil, 0, ConnectionError(ErrCodeCompression)
+				}
+			}
+		}
 
-	r, err := hdec.WriteFull(frames, true)
-	if err != nil {
-		return nil, 0, ConnectionError(ErrCodeCompression)
-	}
+		mh.HeadersFrame.headerFragBuf = nil
+	} else {
+		// The packet is forwarded directly to upstream
+		frames := make([]byte, 0, tsize)
+		for _, f := range frag {
+			frames = append(frames, f...)
+		}
 
-	mh.HeadersFrame.headerFragBuf = nil
+		r, err := hdec.WriteFull(frames, skipCompressHttp2Header)
+		if err != nil {
+			return nil, 0, ConnectionError(ErrCodeCompression)
+		}
+
+		// skipCompressHttp2Header enabled, headerFragBuf contains full transform data
+		mh.HeadersFrame.headerFragBuf = r
+	}
 
 	if err := hdec.Close(); err != nil {
 		return nil, 0, ConnectionError(ErrCodeCompression)

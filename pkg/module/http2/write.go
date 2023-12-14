@@ -187,6 +187,8 @@ type writeResHeaders struct {
 	date          string
 	contentType   string
 	contentLength string
+
+	decodeBuf []byte // valid only SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
 }
 
 func encKV(enc *hpack.Encoder, k, v string) {
