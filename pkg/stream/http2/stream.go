@@ -926,15 +926,16 @@ func (s *clientStream) AppendHeaders(ctx context.Context, headersIn api.HeaderMa
 	var req *http.Request
 	var isReqHeader bool
 
-	// clone for retry
-	headersIn = headersIn.Clone()
 	var decoded []byte
-	switch header := headersIn.(type) {
-	case *mhttp2.ReqHeader:
-		req = header.Wrap.Req
+	reqHeader, ok := headersIn.(*mhttp2.ReqHeader)
+	if ok {
 		isReqHeader = true
-		decoded = header.Wrap.Buf
-	default:
+		decoded = reqHeader.Wrap.Buf
+
+		// clone for retry
+		clone := reqHeader.Clone().(*mhttp2.ReqHeader)
+		req = clone.Wrap.Req
+	} else {
 		req = new(http.Request)
 	}
 
