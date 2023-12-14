@@ -2346,10 +2346,11 @@ func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buf
 
 	var hc headersOrContinuation = hf
 	frag := make([][]byte, 0, 1)
+	tsize := 0
 	msize := 0
 	for {
 		frag = append(frag, hc.HeaderBlockFragment())
-
+		tsize += len(frag)
 		if hc.HeadersEnded() {
 			break
 		}
@@ -2402,10 +2403,15 @@ func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buf
 	// Lose reference to MetaHeadersFrame:
 	defer hdec.SetEmitFunc(func(hf hpack.HeaderField) {})
 
+	// The packet is forwarded directly to upstream
+	frames := make([]byte, 0, tsize)
 	for _, f := range frag {
-		if _, err := hdec.Write(f); err != nil && !errors.Is(err, hpack.ErrNeedMore) {
-			return nil, 0, ConnectionError(ErrCodeCompression)
-		}
+		frames = append(frames, f...)
+	}
+
+	r, err := hdec.WriteFull(frames, true)
+	if err != nil {
+		return nil, 0, ConnectionError(ErrCodeCompression)
 	}
 
 	mh.HeadersFrame.headerFragBuf = nil

@@ -649,7 +649,7 @@ func TestReadVarInt(t *testing.T) {
 		{1, []byte{255, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128}, res{0, 0, errVarintOverflow}},
 	}
 	for _, tt := range tests {
-		i, remain, err := readVarInt(tt.n, tt.p)
+		i, _, remain, err := readVarInt(tt.n, tt.p)
 		consumed := len(tt.p) - len(remain)
 		got := res{i, consumed, err}
 		if got != tt.want {
