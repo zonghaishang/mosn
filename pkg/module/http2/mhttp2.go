@@ -457,39 +457,39 @@ func (sc *MServerConn) writeHeaders(w *writeResHeaders) error {
 
 func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
 
+	var headerBlock []byte
 	if len(w.decodeBuf) > 0 {
-		err := sc.Framer.Connection.Write(buffer.NewIoBufferBytes(w.decodeBuf))
-		return err
+		headerBlock = w.decodeBuf
+	} else {
+
+		coder := hpackPool.Get().(*encoder)
+		defer hpackPool.Put(coder)
+
+		coder.hbuf.Reset()
+
+		enc, buf := coder.henc, coder.hbuf
+
+		if w.httpResCode != 0 {
+			encKV2(enc, ":status", httpCodeString(w.httpResCode), true)
+		}
+
+		encodeHeaders(enc, w.h, w.trailers, true)
+
+		if w.contentType != "" {
+			encKV2(enc, "content-type", w.contentType, true)
+		}
+		if w.contentLength != "" {
+			encKV2(enc, "content-length", w.contentLength, true)
+		}
+		if w.date != "" {
+			encKV2(enc, "date", w.date, true)
+		}
+
+		data := buf.Len()
+		headerBlock = make([]byte, data)
+		copy(headerBlock, buf.Bytes()[:data])
 	}
 
-	coder := hpackPool.Get().(*encoder)
-	defer hpackPool.Put(coder)
-
-	coder.hbuf.Reset()
-
-	enc, buf := coder.henc, coder.hbuf
-
-	if w.httpResCode != 0 {
-		encKV2(enc, ":status", httpCodeString(w.httpResCode), true)
-	}
-
-	encodeHeaders(enc, w.h, w.trailers, true)
-
-	if w.contentType != "" {
-		encKV2(enc, "content-type", w.contentType, true)
-	}
-	if w.contentLength != "" {
-		encKV2(enc, "content-length", w.contentLength, true)
-	}
-	if w.date != "" {
-		encKV2(enc, "date", w.date, true)
-	}
-
-	data := buf.Len()
-	writes := make([]byte, data)
-	copy(writes, buf.Bytes()[:data])
-
-	headerBlock := writes
 	if len(headerBlock) == 0 && w.trailers == nil {
 		panic("unexpected empty hpack")
 	}

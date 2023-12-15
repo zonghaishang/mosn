@@ -397,11 +397,11 @@ func (d *Decoder) parseFieldIndexed(rewrite bool) error {
 	d.buf = buf
 
 	if rewrite {
-		if idx <= uint64(staticTable.len()) {
+		if idx <= staticTableLen {
 			d.rewrite = append(d.rewrite, old[0:c]...)
 		} else {
 
-			d.rewrite = append(d.rewrite, byte(0))
+			d.rewrite = append(d.rewrite, 0x10)
 
 			d.rewrite = appendVarInt(d.rewrite, 7, uint64(len(hf.Name)))
 			d.rewrite = append(d.rewrite, hf.Name...)
@@ -423,7 +423,7 @@ func (d *Decoder) parseFieldLiteral(n uint8, it indexType, rewrite bool) error {
 	}
 
 	if rewrite {
-		d.rewrite = append(d.rewrite, byte(0))
+		d.rewrite = append(d.rewrite, 0x10)
 	}
 
 	var cc, dc uint64
