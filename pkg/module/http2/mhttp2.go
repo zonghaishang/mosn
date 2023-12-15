@@ -161,6 +161,8 @@ func (ms *MStream) WriteData() (err error) {
 				return err
 			}
 			remain := buf[:n]
+			noTrailer := ms.Trailer == nil || len(*ms.Trailer) == 0
+			endStream := false
 			for len(remain) > 0 && err == nil {
 				var allowed int32
 				if allowed, err = ms.awaitFlowControl(len(remain)); err != nil {
@@ -168,11 +170,14 @@ func (ms *MStream) WriteData() (err error) {
 				}
 				data := remain[:allowed]
 				remain = remain[allowed:]
-				err = ms.conn.Framer.writeData(ms.id, false, data)
+				endStream = (len(remain) == 0) && noTrailer
+				err = ms.conn.Framer.writeData(ms.id, endStream, data)
 			}
 		}
 	} else {
 		remain := ms.SendData.Bytes()
+		noTrailer := ms.Trailer == nil || len(*ms.Trailer) == 0
+		endStream := false
 		for len(remain) > 0 && err == nil {
 			var allowed int32
 			if allowed, err = ms.awaitFlowControl(len(remain)); err != nil {
@@ -180,7 +185,8 @@ func (ms *MStream) WriteData() (err error) {
 			}
 			data := remain[:allowed]
 			remain = remain[allowed:]
-			err = ms.conn.Framer.writeData(ms.id, false, data)
+			endStream = (len(remain) == 0) && noTrailer
+			err = ms.conn.Framer.writeData(ms.id, endStream, data)
 		}
 	}
 	return
@@ -270,6 +276,13 @@ func (ms *MStream) SendResponse() error {
 	if err := ms.WriteData(); err != nil {
 		return err
 	}
+
+	if ms.Trailer == nil || len(*ms.Trailer) == 0 {
+		// WriteTrailers close steam
+		ms.conn.closeStream(ms.stream, nil)
+		return nil
+	}
+
 	return ms.WriteTrailers()
 }
 
@@ -1524,6 +1537,8 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 				return err
 			}
 			remain := buf[:n]
+			endStream := false
+			noTrailer := cc.Trailer == nil || len(*cc.Trailer) == 0
 			for len(remain) > 0 {
 				var allowed int32
 				if allowed, err = cc.awaitFlowControl(len(remain)); err != nil {
@@ -1531,13 +1546,16 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 				}
 				data := remain[:allowed]
 				remain = remain[allowed:]
-				if err = conn.Framer.writeData(cc.ID, false, data); err != nil {
+				endStream = len(remain) == 0 && noTrailer
+				if err = conn.Framer.writeData(cc.ID, endStream, data); err != nil {
 					return err
 				}
 			}
 		}
 	} else {
 		remain := cc.SendData.Bytes()
+		endStream := false
+		noTrailer := cc.Trailer == nil || len(*cc.Trailer) == 0
 		for len(remain) > 0 {
 			var allowed int32
 			if allowed, err = cc.awaitFlowControl(len(remain)); err != nil {
@@ -1546,8 +1564,14 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 			}
 			data := remain[:allowed]
 			remain = remain[allowed:]
-			if err = conn.Framer.writeData(cc.ID, false, data); err != nil {
+
+			endStream = len(remain) == 0 && noTrailer
+			if err = conn.Framer.writeData(cc.ID, endStream, data); err != nil {
 				return err
+			}
+
+			if endStream {
+				return
 			}
 		}
 	}
