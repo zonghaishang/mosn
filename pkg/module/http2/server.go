@@ -561,7 +561,6 @@ type stream struct {
 
 	trailer    http.Header // accumulated trailers
 	reqTrailer http.Header // handler's Request.Trailer
-	trailerBuf []byte      // decoded trailer buff, only valid SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
 }
 
 func (sc *serverConn) Framer() *Framer  { return sc.framer }

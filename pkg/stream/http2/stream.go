@@ -121,7 +121,7 @@ type stream struct {
 	id      uint32
 	header  types.HeaderMap
 	recData types.IoBuffer
-	trailer *mhttp2.HeaderMap
+	trailer *mhttp2.TrailerHeader
 	conn    api.Connection
 }
 
@@ -311,17 +311,18 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 		return
 	}
 	var h2s *http2.MStream
-	var endStream, hasTrailer bool
+	var endStream bool
+	var trailer *mhttp2.TrailerHeader
 	var data []byte
 
-	h2s, data, hasTrailer, endStream, err = conn.sc.HandleFrame(ctx, f)
+	h2s, data, trailer, endStream, err = conn.sc.HandleFrame(ctx, f)
 
 	if err != nil {
 		conn.handleError(ctx, f, err)
 		return
 	}
 
-	if h2s == nil && data == nil && !hasTrailer && !endStream {
+	if h2s == nil && data == nil && trailer == nil && !endStream {
 		return
 	}
 
@@ -370,7 +371,6 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 			return
 		}
 		stream.header = header
-		stream.trailer = &mhttp2.HeaderMap{}
 	}
 
 	if stream == nil {
@@ -407,8 +407,8 @@ func (conn *serverStreamConnection) handleFrame(ctx context.Context, i interface
 		}
 	}
 
-	if hasTrailer {
-		stream.trailer.H = stream.h2s.Request.Req.Trailer
+	if trailer != nil {
+		stream.trailer = trailer
 
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
 			log.Proxy.Debugf(stream.ctx, "http2 server trailer: %d, %v", id, stream.h2s.Request.Req.Trailer)
@@ -572,11 +572,13 @@ func (s *serverStream) AppendData(context context.Context, data buffer.IoBuffer,
 func (s *serverStream) AppendTrailers(context context.Context, trailers api.HeaderMap) error {
 	if trailers != nil {
 		switch trailer := trailers.(type) {
-		case *mhttp2.HeaderMap:
-			s.h2s.Trailer = &trailer.H
+		case *mhttp2.TrailerHeader:
+			s.h2s.Trailer = trailer
 		default:
 			header := mhttp2.EncodeHeader(trailer)
-			s.h2s.Trailer = &header
+			s.h2s.Trailer = &mhttp2.TrailerHeader{
+				HeaderMap: mhttp2.HeaderMap{H: header},
+			}
 		}
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
 			log.Proxy.Debugf(s.ctx, "http2 server ApppendTrailers id = %d, trailer = %+v", s.id, s.h2s.Trailer)
@@ -770,7 +772,7 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 	}
 	var endStream bool
 	var data []byte
-	var trailer http.Header
+	var trailer *mhttp2.TrailerHeader
 	var wrap *http2.ResponseWrapper
 	var lastStream uint32
 
@@ -830,7 +832,6 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 			return
 		}
 		stream.header = header
-		stream.trailer = &mhttp2.HeaderMap{}
 	}
 
 	// data
@@ -860,7 +861,7 @@ func (conn *clientStreamConnection) handleFrame(ctx context.Context, i interface
 
 	}
 	if trailer != nil {
-		stream.trailer.H = trailer
+		stream.trailer = trailer
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
 			log.Proxy.Debugf(stream.ctx, "http2 client trailer: id = %d, trailer = %+v", id, trailer)
 		}
@@ -1020,11 +1021,13 @@ func (s *clientStream) AppendData(context context.Context, data buffer.IoBuffer,
 func (s *clientStream) AppendTrailers(context context.Context, trailers api.HeaderMap) error {
 	if trailers != nil {
 		switch trailer := trailers.(type) {
-		case *mhttp2.HeaderMap:
-			s.h2s.Trailer = &trailer.H
+		case *mhttp2.TrailerHeader:
+			s.h2s.Trailer = trailer
 		default:
 			header := mhttp2.EncodeHeader(trailer)
-			s.h2s.Trailer = &header
+			s.h2s.Trailer = &mhttp2.TrailerHeader{
+				HeaderMap: mhttp2.HeaderMap{H: header},
+			}
 		}
 		if log.Proxy.GetLogLevel() >= log.DEBUG {
 			log.Proxy.Debugf(s.ctx, "http2 client AppendTrailers: id = %d, trailer = %+v", s.id, s.h2s.Trailer)

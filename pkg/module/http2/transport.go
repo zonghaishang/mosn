@@ -20,6 +20,7 @@ import (
 	"log"
 	"math"
 	mathrand "math/rand"
+	"mosn.io/mosn/pkg/protocol/http2"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -272,7 +273,6 @@ type clientStream struct {
 
 	trailer    http.Header  // accumulated trailers
 	resTrailer *http.Header // client's Response.Trailer
-	decodeBuf  []byte       // only valid SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
 }
 
 // awaitRequestCancel waits for the user to cancel a request or for the done
@@ -1546,7 +1546,11 @@ func (cc *ClientConn) encodeTrailers(req *http.Request) ([]byte, error) {
 	return cc.hbuf.Bytes(), nil
 }
 
-func (cc *ClientConn) encodeTrailersLockFree(req *http.Request) ([]byte, error) {
+func (cc *ClientConn) encodeTrailersLockFree(req *http2.TrailerHeader) ([]byte, error) {
+
+	if len(req.Buf) > 0 {
+		return req.Buf, nil
+	}
 
 	enc := hpackPool.Get().(*encoder)
 	defer hpackPool.Put(enc)
@@ -1554,7 +1558,7 @@ func (cc *ClientConn) encodeTrailersLockFree(req *http.Request) ([]byte, error) 
 	enc.hbuf.Reset()
 
 	hlSize := uint64(0)
-	for k, vv := range req.Trailer {
+	for k, vv := range req.H {
 		for _, v := range vv {
 			hf := hpack.HeaderField{Name: strings.ToLower(k), Value: v, Sensitive: skipCompressHttp2Header}
 			hlSize += uint64(hf.Size())

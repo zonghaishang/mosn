@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"mosn.io/mosn/pkg/protocol/http2"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -78,7 +79,7 @@ type MStream struct {
 	//RequestRawData []byte // only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
 	Request  *RequestWrapper
 	Response *ResponseWrapper
-	Trailer  *http.Header
+	Trailer  *http2.TrailerHeader
 	//TrailerRawData []byte // only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
 	//Trailer   *TrailerWrapper
 	SendData  buffer.IoBuffer
@@ -161,7 +162,7 @@ func (ms *MStream) WriteData() (err error) {
 				return err
 			}
 			remain := buf[:n]
-			noTrailer := ms.Trailer == nil || len(*ms.Trailer) == 0
+			noTrailer := ms.Trailer == nil || len(ms.Trailer.H) == 0
 			endStream := false
 			for len(remain) > 0 && err == nil {
 				var allowed int32
@@ -176,7 +177,7 @@ func (ms *MStream) WriteData() (err error) {
 		}
 	} else {
 		remain := ms.SendData.Bytes()
-		noTrailer := ms.Trailer == nil || len(*ms.Trailer) == 0
+		noTrailer := ms.Trailer == nil || len(ms.Trailer.H) == 0
 		endStream := false
 		for len(remain) > 0 && err == nil {
 			var allowed int32
@@ -225,13 +226,13 @@ func (ms *MStream) awaitFlowControl(maxBytes int) (taken int32, err error) {
 
 func (ms *MStream) WriteTrailers() error {
 	defer ms.conn.closeStream(ms.stream, nil)
-	var tramap http.Header
+	var tramap *http2.TrailerHeader
 	if ms.Trailer != nil {
-		tramap = *ms.Trailer
+		tramap = ms.Trailer
 	}
 	var trailers []string
 	if tramap != nil {
-		for k, _ := range tramap {
+		for k, _ := range tramap.H {
 			k = http.CanonicalHeaderKey(k)
 			if !httpguts.ValidTrailerHeader(k) {
 				tramap.Del(k)
@@ -245,9 +246,10 @@ func (ms *MStream) WriteTrailers() error {
 	if len(trailers) > 0 {
 		ws := &writeResHeaders{
 			streamID:  ms.id,
-			h:         tramap,
+			h:         tramap.H,
 			trailers:  trailers,
 			endStream: true,
+			decodeBuf: tramap.Buf,
 		}
 		if !skipCompressHttp2Header {
 			err = ms.conn.writeHeaders(ws)
@@ -277,7 +279,7 @@ func (ms *MStream) SendResponse() error {
 		return err
 	}
 
-	if ms.Trailer == nil || len(*ms.Trailer) == 0 {
+	if ms.Trailer == nil || len(ms.Trailer.H) == 0 {
 		// WriteTrailers close steam
 		ms.conn.closeStream(ms.stream, nil)
 		return nil
@@ -542,10 +544,11 @@ func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
 }
 
 // HandleFrame is Http2 Server handles Frame
-func (sc *MServerConn) HandleFrame(ctx context.Context, f Frame) (*MStream, []byte, bool, bool, error) {
+func (sc *MServerConn) HandleFrame(ctx context.Context, f Frame) (*MStream, []byte, *http2.TrailerHeader, bool, error) {
 	var err error
 	var ms *MStream
-	var endStream, trailer bool
+	var endStream bool
+	var trailer *http2.TrailerHeader
 	var data []byte
 	switch f := f.(type) {
 	case *SettingsFrame:
@@ -601,15 +604,15 @@ func (sc *MServerConn) HandleError(ctx context.Context, f Frame, err error) {
 }
 
 // processHeaders processes Headers Frame
-func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*MStream, bool, bool, error) {
+func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*MStream, *http2.TrailerHeader, bool, error) {
 	id := f.StreamID
 	if sc.inGoAway {
 		// Ignore.
-		return nil, false, false, nil
+		return nil, nil, false, nil
 	}
 
 	if id%2 != 1 {
-		return nil, false, false, ConnectionError(ErrCodeProtocol)
+		return nil, nil, false, ConnectionError(ErrCodeProtocol)
 	}
 	// A HEADERS frame can be used to create a new stream or
 	// send a trailer for an open one. If we already have a stream
@@ -619,10 +622,10 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 		if st.resetQueued {
 			// We're sending RST_STREAM to close the stream, so don't bother
 			// processing this frame.
-			return nil, false, false, nil
+			return nil, nil, false, nil
 		}
-		err := st.mprocessTrailerHeaders(ctx, f)
-		return nil, true, true, err
+		trailer, err := st.mprocessTrailerHeaders(ctx, f)
+		return nil, trailer, true, err
 	}
 
 	// [...] The identifier of a newly established stream MUST be
@@ -631,7 +634,7 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 	// receives an unexpected stream identifier MUST respond with
 	// a connection error (Section 5.4.1) of type PROTOCOL_ERROR.
 	if id <= sc.maxClientStreamID {
-		return nil, false, false, ConnectionError(ErrCodeProtocol)
+		return nil, nil, false, ConnectionError(ErrCodeProtocol)
 	}
 	sc.maxClientStreamID = id
 
@@ -644,14 +647,14 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 	if sc.curClientStreams+1 > sc.advMaxStreams {
 		if sc.unackedSettings == 0 {
 			// They should know better.
-			return nil, false, false, streamError(id, ErrCodeProtocol)
+			return nil, nil, false, streamError(id, ErrCodeProtocol)
 		}
 		// Assume it's a network race, where they just haven't
 		// received our last SETTINGS update. But actually
 		// this can't happen yet, because we don't yet provide
 		// a way for users to adjust server parameters at
 		// runtime.
-		return nil, false, false, streamError(id, ErrCodeRefusedStream)
+		return nil, nil, false, streamError(id, ErrCodeRefusedStream)
 	}
 
 	initialState := stateOpen
@@ -667,7 +670,7 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 
 	req, err := sc.processRequest(st, f)
 	if err != nil {
-		return nil, false, false, err
+		return nil, nil, false, err
 	}
 
 	st.reqTrailer = req.Trailer
@@ -676,46 +679,49 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 	}
 	st.declBodyBytes = req.ContentLength
 
-	ms.Request = &RequestWrapper{Req: req}
-	if f.headerFragBuf != nil {
-		ms.Request.Buf = f.headerFragBuf
-	}
+	ms.Request = &RequestWrapper{Req: req, Buf: f.headerFragBuf}
 
-	return ms, false, f.StreamEnded(), nil
+	return ms, nil, f.StreamEnded(), nil
 }
 
 // mprocessTrailerHeaders Processes trailer headers
-func (st *stream) mprocessTrailerHeaders(ctx context.Context, f *MetaHeadersFrame) error {
+func (st *stream) mprocessTrailerHeaders(ctx context.Context, f *MetaHeadersFrame) (*http2.TrailerHeader, error) {
 	sc := st.sc
 	if st.gotTrailerHeader {
-		return ConnectionError(ErrCodeProtocol)
+		return nil, ConnectionError(ErrCodeProtocol)
 	}
 	st.gotTrailerHeader = true
 	if !f.StreamEnded() {
-		return streamError(st.id, ErrCodeProtocol)
+		return nil, streamError(st.id, ErrCodeProtocol)
 	}
 
 	if len(f.PseudoFields()) > 0 {
-		return streamError(st.id, ErrCodeProtocol)
+		return nil, streamError(st.id, ErrCodeProtocol)
 	}
 	if st.trailer != nil {
 		for _, hf := range f.RegularFields() {
 			key := sc.canonicalHeader(hf.Name)
 			if !httpguts.ValidTrailerHeader(key) {
-				return streamError(st.id, ErrCodeProtocol)
+				return nil, streamError(st.id, ErrCodeProtocol)
 			}
 			st.trailer[key] = append(st.trailer[key], hf.Value)
-		}
-
-		if f.headerFragBuf != nil {
-			st.trailerBuf = f.headerFragBuf
 		}
 	}
 
 	st.copyTrailersToHandlerRequest()
 	st.state = stateHalfClosedRemote
 
-	return nil
+	if st.trailer != nil {
+		// trailer containers decode buf
+		trailer := &http2.TrailerHeader{
+			HeaderMap: http2.HeaderMap{H: st.trailer},
+			Buf:       f.headerFragBuf,
+		}
+
+		return trailer, nil
+	}
+
+	return nil, nil
 }
 
 // processRequest processes headers frame and build http.Request for Http2 Server
@@ -1458,7 +1464,7 @@ type MClientStream struct {
 	conn       *MClientConn
 	Request    *RequestWrapper
 	SendData   buffer.IoBuffer
-	Trailer    *http.Header
+	Trailer    *http2.TrailerHeader
 	UseStream  bool
 	sendHeader bool
 }
@@ -1538,7 +1544,7 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 			}
 			remain := buf[:n]
 			endStream := false
-			noTrailer := cc.Trailer == nil || len(*cc.Trailer) == 0
+			noTrailer := cc.Trailer == nil || len(cc.Trailer.H) == 0
 			for len(remain) > 0 {
 				var allowed int32
 				if allowed, err = cc.awaitFlowControl(len(remain)); err != nil {
@@ -1555,7 +1561,7 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 	} else {
 		remain := cc.SendData.Bytes()
 		endStream := false
-		noTrailer := cc.Trailer == nil || len(*cc.Trailer) == 0
+		noTrailer := cc.Trailer == nil || len(cc.Trailer.H) == 0
 		for len(remain) > 0 {
 			var allowed int32
 			if allowed, err = cc.awaitFlowControl(len(remain)); err != nil {
@@ -1577,13 +1583,13 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 	}
 
 	//write trailer
-	if cc.Trailer == nil || len(*cc.Trailer) == 0 {
+	if cc.Trailer == nil || len(cc.Trailer.H) == 0 {
 		err = cc.conn.Framer.writeData(cc.ID, true, nil)
 		if err != nil {
 			return
 		}
 	} else {
-		cc.Request.Req.Trailer = *cc.Trailer
+		cc.Request.Req.Trailer = cc.Trailer.H
 
 		if !skipCompressHttp2Header {
 			cc.conn.mu.Lock()
@@ -1603,7 +1609,7 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 		} else {
 
 			var trls []byte
-			trls, err = cc.conn.encodeTrailersLockFree(cc.Request.Req)
+			trls, err = cc.conn.encodeTrailersLockFree(cc.Trailer)
 			if err != nil {
 				log.DefaultLogger.Errorf("[Stream H2] [Client] Encode trailer error: %v", err)
 				return
@@ -1768,11 +1774,11 @@ func (cc *MClientConn) HandleError(ctx context.Context, streamId uint32, err err
 }
 
 // HandlerFrame handles Frame for Http2 Client
-func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*ResponseWrapper, []byte, http.Header, bool, uint32, error) {
+func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*ResponseWrapper, []byte, *http2.TrailerHeader, bool, uint32, error) {
 	var err error
 	var data []byte
 	var endStream bool
-	var trailer http.Header
+	var trailer *http2.TrailerHeader
 	var rsp *ResponseWrapper
 	var lastStream uint32
 
@@ -1818,7 +1824,7 @@ func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*ResponseWrapp
 }
 
 // processHeaders processes headers Frame for Http2 Client
-func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*ResponseWrapper, http.Header, bool, error) {
+func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*ResponseWrapper, *http2.TrailerHeader, bool, error) {
 	cs := cc.streamByID(f.StreamID, f.StreamEnded())
 	if cs == nil {
 		return nil, nil, false, nil
@@ -1852,11 +1858,12 @@ func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 			trailer[key] = append(trailer[key], hf.Value)
 		}
 
-		if f.headerFragBuf != nil {
-			cs.decodeBuf = f.headerFragBuf
+		tt := &http2.TrailerHeader{
+			HeaderMap: http2.HeaderMap{H: trailer},
+			Buf:       f.headerFragBuf,
 		}
 
-		return nil, trailer, true, nil
+		return nil, tt, true, nil
 	}
 
 	res, err := cc.handleResponse(cs, f)
