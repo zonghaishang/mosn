@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"mosn.io/mosn/pkg/protocol/http2"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -75,15 +74,11 @@ type MStream struct {
 	*stream
 	sentContentLen int64
 	conn           *MServerConn
-	//Request        *http.Request
-	//RequestRawData []byte // only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
-	Request  *RequestWrapper
-	Response *ResponseWrapper
-	Trailer  *http2.TrailerHeader
-	//TrailerRawData []byte // only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
-	//Trailer   *TrailerWrapper
-	SendData  buffer.IoBuffer
-	UseStream bool
+	Request        *RequestWrapper
+	Response       *ResponseWrapper
+	Trailer        *TrailerWrapper
+	SendData       buffer.IoBuffer
+	UseStream      bool
 }
 
 // ID returns stream id
@@ -226,7 +221,7 @@ func (ms *MStream) awaitFlowControl(maxBytes int) (taken int32, err error) {
 
 func (ms *MStream) WriteTrailers() error {
 	defer ms.conn.closeStream(ms.stream, nil)
-	var tramap *http2.TrailerHeader
+	var tramap *TrailerWrapper
 	if ms.Trailer != nil {
 		tramap = ms.Trailer
 	}
@@ -235,7 +230,7 @@ func (ms *MStream) WriteTrailers() error {
 		for k, _ := range tramap.H {
 			k = http.CanonicalHeaderKey(k)
 			if !httpguts.ValidTrailerHeader(k) {
-				tramap.Del(k)
+				tramap.H.Del(k)
 			} else {
 				trailers = append(trailers, k)
 			}
@@ -544,11 +539,11 @@ func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
 }
 
 // HandleFrame is Http2 Server handles Frame
-func (sc *MServerConn) HandleFrame(ctx context.Context, f Frame) (*MStream, []byte, *http2.TrailerHeader, bool, error) {
+func (sc *MServerConn) HandleFrame(ctx context.Context, f Frame) (*MStream, []byte, *TrailerWrapper, bool, error) {
 	var err error
 	var ms *MStream
 	var endStream bool
-	var trailer *http2.TrailerHeader
+	var trailer *TrailerWrapper
 	var data []byte
 	switch f := f.(type) {
 	case *SettingsFrame:
@@ -604,7 +599,7 @@ func (sc *MServerConn) HandleError(ctx context.Context, f Frame, err error) {
 }
 
 // processHeaders processes Headers Frame
-func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*MStream, *http2.TrailerHeader, bool, error) {
+func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*MStream, *TrailerWrapper, bool, error) {
 	id := f.StreamID
 	if sc.inGoAway {
 		// Ignore.
@@ -685,7 +680,7 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 }
 
 // mprocessTrailerHeaders Processes trailer headers
-func (st *stream) mprocessTrailerHeaders(ctx context.Context, f *MetaHeadersFrame) (*http2.TrailerHeader, error) {
+func (st *stream) mprocessTrailerHeaders(ctx context.Context, f *MetaHeadersFrame) (*TrailerWrapper, error) {
 	sc := st.sc
 	if st.gotTrailerHeader {
 		return nil, ConnectionError(ErrCodeProtocol)
@@ -713,9 +708,9 @@ func (st *stream) mprocessTrailerHeaders(ctx context.Context, f *MetaHeadersFram
 
 	if st.trailer != nil {
 		// trailer containers decode buf
-		trailer := &http2.TrailerHeader{
-			HeaderMap: http2.HeaderMap{H: st.trailer},
-			Buf:       f.headerFragBuf,
+		trailer := &TrailerWrapper{
+			H:   st.trailer,
+			Buf: f.headerFragBuf,
 		}
 
 		return trailer, nil
@@ -1445,18 +1440,18 @@ func (cc *MClientConn) encodeHeadersLockFree(wrap *RequestWrapper, addGzipHeader
 
 type RequestWrapper struct {
 	Req *http.Request
-	Buf []byte // don't clone
+	Buf []byte // don't clone, only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
 }
 
 type ResponseWrapper struct {
 	Rsp *http.Response
-	Buf []byte // don't clone
+	Buf []byte // don't clone, only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
 }
 
-//type TrailerWrapper struct {
-//	Trailer *http.Header
-//	Buf     []byte // don't clone
-//}
+type TrailerWrapper struct {
+	H   http.Header
+	Buf []byte // don't clone, only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
+}
 
 // MClientStream is Http2 Client Stream
 type MClientStream struct {
@@ -1464,7 +1459,7 @@ type MClientStream struct {
 	conn       *MClientConn
 	Request    *RequestWrapper
 	SendData   buffer.IoBuffer
-	Trailer    *http2.TrailerHeader
+	Trailer    *TrailerWrapper
 	UseStream  bool
 	sendHeader bool
 }
@@ -1774,11 +1769,11 @@ func (cc *MClientConn) HandleError(ctx context.Context, streamId uint32, err err
 }
 
 // HandlerFrame handles Frame for Http2 Client
-func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*ResponseWrapper, []byte, *http2.TrailerHeader, bool, uint32, error) {
+func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*ResponseWrapper, []byte, *TrailerWrapper, bool, uint32, error) {
 	var err error
 	var data []byte
 	var endStream bool
-	var trailer *http2.TrailerHeader
+	var trailer *TrailerWrapper
 	var rsp *ResponseWrapper
 	var lastStream uint32
 
@@ -1824,7 +1819,7 @@ func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*ResponseWrapp
 }
 
 // processHeaders processes headers Frame for Http2 Client
-func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*ResponseWrapper, *http2.TrailerHeader, bool, error) {
+func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*ResponseWrapper, *TrailerWrapper, bool, error) {
 	cs := cc.streamByID(f.StreamID, f.StreamEnded())
 	if cs == nil {
 		return nil, nil, false, nil
@@ -1858,9 +1853,9 @@ func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 			trailer[key] = append(trailer[key], hf.Value)
 		}
 
-		tt := &http2.TrailerHeader{
-			HeaderMap: http2.HeaderMap{H: trailer},
-			Buf:       f.headerFragBuf,
+		tt := &TrailerWrapper{
+			H:   trailer,
+			Buf: f.headerFragBuf,
 		}
 
 		return nil, tt, true, nil

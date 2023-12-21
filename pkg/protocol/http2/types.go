@@ -32,13 +32,12 @@ type HeaderMap struct {
 
 type ReqHeader struct {
 	*HeaderMap
-	//Req *http.Request
 	Wrap *http2.RequestWrapper
 }
 
-type TrailerHeader struct {
-	HeaderMap
-	Buf []byte // don't clone
+type TrailerMap struct {
+	*HeaderMap
+	Wrap *http2.TrailerWrapper
 }
 
 type RspHeader struct {
@@ -63,6 +62,13 @@ func NewReqWrapHeader(req *http2.RequestWrapper) *ReqHeader {
 	h := new(ReqHeader)
 	h.Wrap = req
 	h.HeaderMap = NewHeaderMap(req.Req.Header)
+	return h
+}
+
+func NewTrailerWrapHeader(req *http2.TrailerWrapper) *TrailerMap {
+	h := new(TrailerMap)
+	h.Wrap = req
+	h.HeaderMap = NewHeaderMap(req.H)
 	return h
 }
 

@@ -20,7 +20,6 @@ import (
 	"log"
 	"math"
 	mathrand "math/rand"
-	"mosn.io/mosn/pkg/protocol/http2"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -1546,7 +1545,7 @@ func (cc *ClientConn) encodeTrailers(req *http.Request) ([]byte, error) {
 	return cc.hbuf.Bytes(), nil
 }
 
-func (cc *ClientConn) encodeTrailersLockFree(req *http2.TrailerHeader) ([]byte, error) {
+func (cc *ClientConn) encodeTrailersLockFree(req *TrailerWrapper) ([]byte, error) {
 
 	if len(req.Buf) > 0 {
 		return req.Buf, nil
