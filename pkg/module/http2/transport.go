@@ -208,10 +208,10 @@ type ClientConn struct {
 	idleTimeout time.Duration // or 0 for never
 	idleTimer   *time.Timer
 
-	mu              sync.Mutex // guards following
-	cond            *sync.Cond // hold mu; broadcast on flow/closed changes
-	flow            flow       // our conn-level flow control quota (cs.flow is per stream)
-	inflow          flow       // peer's conn-level flow control
+	mu              sync.RWMutex // guards following
+	cond            *sync.Cond   // hold mu; broadcast on flow/closed changes
+	flow            flow         // our conn-level flow control quota (cs.flow is per stream)
+	inflow          flow         // peer's conn-level flow control
 	closing         bool
 	closed          bool
 	wantSettingsAck bool                     // we sent a SETTINGS frame and haven't heard back
@@ -1545,6 +1545,32 @@ func (cc *ClientConn) encodeTrailers(req *http.Request) ([]byte, error) {
 	return cc.hbuf.Bytes(), nil
 }
 
+func (cc *ClientConn) encodeTrailersLockFree(req *TrailerWrapper) ([]byte, error) {
+
+	if len(req.Buf) > 0 {
+		return req.Buf, nil
+	}
+
+	enc := hpackPool.Get().(*encoder)
+	defer hpackPool.Put(enc)
+
+	enc.hbuf.Reset()
+
+	hlSize := uint64(0)
+	for k, vv := range req.H {
+		for _, v := range vv {
+			hf := hpack.HeaderField{Name: strings.ToLower(k), Value: v, Sensitive: skipCompressHttp2Header}
+			hlSize += uint64(hf.Size())
+			enc.henc.WriteField(hf)
+		}
+	}
+	if hlSize > cc.peerMaxHeaderListSize {
+		return nil, errRequestHeaderListSize
+	}
+
+	return enc.hbuf.Bytes(), nil
+}
+
 func (cc *ClientConn) writeHeader(name, value string) {
 	if VerboseLogs {
 		log.Printf("http2: Transport encoding header %q = %q", name, value)
@@ -2374,7 +2400,11 @@ func (cc *ClientConn) logf(format string, args ...interface{}) {
 }
 
 func (cc *ClientConn) vlogf(format string, args ...interface{}) {
-	cc.t.vlogf(format, args...)
+	//cc.t.vlogf(format, args...)
+	if VerboseLogs {
+		//t.logf(format, args...)
+		log.Printf(format, args...)
+	}
 }
 
 func (t *Transport) vlogf(format string, args ...interface{}) {

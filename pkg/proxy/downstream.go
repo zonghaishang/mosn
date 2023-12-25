@@ -24,6 +24,7 @@ import (
 	"net"
 	nethttp "net/http"
 	"net/url"
+	"os"
 	"reflect"
 	"runtime/debug"
 	"strconv"
@@ -44,6 +45,16 @@ import (
 	"mosn.io/pkg/utils"
 	"mosn.io/pkg/variable"
 )
+
+var useSchedulePool = true
+
+func init() {
+	p := os.Getenv("USE_GLOBAL_SCHEDULE_POOL")
+	if p == "false" {
+		useSchedulePool = false
+		log.Proxy.Infof(context.Background(), "[proxy] [downstream] use global pool %t", useSchedulePool)
+	}
+}
 
 // types.StreamEventListener
 // types.StreamReceiveListener
@@ -218,10 +229,10 @@ func (s *downStream) endStream() {
 
 // Clean up on the very end of the stream: end stream or reset stream
 // Resources to clean up / reset:
-// 	+ upstream request
-// 	+ all timers
-// 	+ all filters
-//  + remove stream in proxy context
+//   - upstream request
+//   - all timers
+//   - all filters
+//   - remove stream in proxy context
 func (s *downStream) cleanStream() {
 	if !atomic.CompareAndSwapUint32(&s.downstreamCleaned, 0, 1) {
 		return
@@ -425,7 +436,13 @@ func (s *downStream) OnReceive(ctx context.Context, headers types.HeaderMap, dat
 			s.proxy.workerpool.Schedule(task)
 		} else {
 			// use the global shared worker pool
-			pool.ScheduleAuto(task)
+			if useSchedulePool {
+				pool.ScheduleAuto(task)
+			} else {
+				utils.GoWithRecover(func() {
+					task()
+				}, nil)
+			}
 		}
 		return
 	}
@@ -1488,6 +1505,9 @@ func (s *downStream) giveStream() {
 			log.Proxy.Errorf(s.context, "[proxy] [downstream] PutIoBuffer error: %v", e)
 		}
 	}
+
+	// Give index variable first
+	variable.GiveIndexVariables(s.context)
 
 	// Give buffers to bufferPool
 	if ctx := buffer.PoolContext(s.context); ctx != nil {

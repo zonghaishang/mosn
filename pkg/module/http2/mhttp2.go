@@ -14,7 +14,9 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,16 +37,46 @@ var (
 	ErrDepStreamID = errDepStreamID
 	//todo: support configuration
 	initialConnRecvWindowSize = int32(1 << 30)
+
+	skipCompressHttp2Header = false
 )
+
+func init() {
+	skip := os.Getenv("SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE")
+	if skip == "true" {
+		skipCompressHttp2Header = true
+		log.DefaultLogger.Infof("[http2] ：skip compress http2 header")
+	}
+}
+
+var hpackPool = &sync.Pool{
+	New: func() interface{} {
+		buf := bytes.Buffer{}
+		return &encoder{
+			hbuf: &buf,
+			henc: hpack.NewEncoder(&buf),
+		}
+	}}
+
+//var hpackField = &sync.Pool{
+//	New: func() interface{} {
+//		return make([]hpack.HeaderField, 0, 8)
+//	},
+//}
+
+type encoder struct {
+	hbuf *bytes.Buffer
+	henc *hpack.Encoder
+}
 
 // Mstream is Http2 Server stream
 type MStream struct {
 	*stream
 	sentContentLen int64
 	conn           *MServerConn
-	Request        *http.Request
-	Response       *http.Response
-	Trailer        *http.Header
+	Request        *RequestWrapper
+	Response       *ResponseWrapper
+	Trailer        *TrailerWrapper
 	SendData       buffer.IoBuffer
 	UseStream      bool
 }
@@ -57,17 +89,17 @@ func (ms *MStream) ID() uint32 {
 // SendResponse is Http2 Server send response
 func (ms *MStream) WriteHeader(end bool) error {
 	rsp := ms.Response
-	endStream := end || ms.Request.Method == "HEAD"
+	endStream := end || ms.Request.Req.Method == "HEAD"
 
-	isHeadResp := ms.Request.Method == "HEAD"
+	isHeadResp := ms.Request.Req.Method == "HEAD"
 	var ctype, clen string
 	var dataLen int
 	if ms.SendData != nil {
 		dataLen = ms.SendData.Len()
 	}
 
-	if clen = rsp.Header.Get("Content-Length"); clen != "" {
-		rsp.Header.Del("Content-Length")
+	if clen = rsp.Rsp.Header.Get("Content-Length"); clen != "" {
+		rsp.Rsp.Header.Del("Content-Length")
 		clen64, err := strconv.ParseInt(clen, 10, 64)
 		if err == nil && clen64 >= 0 {
 			ms.sentContentLen = clen64
@@ -76,32 +108,38 @@ func (ms *MStream) WriteHeader(end bool) error {
 		}
 	}
 
-	if dataLen == 0 || isHeadResp || !bodyAllowedForStatus(rsp.StatusCode) {
+	if dataLen == 0 || isHeadResp || !bodyAllowedForStatus(rsp.Rsp.StatusCode) {
 		clen = "0"
 	}
 
-	hasContentType := rsp.Header.Get("Content-Type")
-	if hasContentType == "" && bodyAllowedForStatus(rsp.StatusCode) && dataLen > 0 {
+	hasContentType := rsp.Rsp.Header.Get("Content-Type")
+	if hasContentType == "" && bodyAllowedForStatus(rsp.Rsp.StatusCode) && dataLen > 0 {
 		ctype = http.DetectContentType(ms.SendData.Bytes())
 	}
 	var date string
-	if ok := rsp.Header.Get("Date"); ok == "" {
+	if ok := rsp.Rsp.Header.Get("Date"); ok == "" {
 		date = time.Now().UTC().Format(http.TimeFormat)
 	}
 
 	ws := &writeResHeaders{
 		streamID:      ms.id,
-		httpResCode:   rsp.StatusCode,
-		h:             rsp.Header,
+		httpResCode:   rsp.Rsp.StatusCode,
+		h:             rsp.Rsp.Header,
 		endStream:     endStream,
 		contentLength: clen,
 		contentType:   ctype,
 		date:          date,
+		decodeBuf:     rsp.Buf,
 	}
 	if endStream {
 		ms.conn.closeStream(ms.stream, nil)
 	}
-	return ms.conn.writeHeaders(ws)
+
+	if !skipCompressHttp2Header {
+		return ms.conn.writeHeaders(ws)
+	}
+
+	return ms.conn.writeHeadersLockFree(ws)
 }
 
 func (ms *MStream) WriteData() (err error) {
@@ -119,6 +157,8 @@ func (ms *MStream) WriteData() (err error) {
 				return err
 			}
 			remain := buf[:n]
+			noTrailer := ms.Trailer == nil || len(ms.Trailer.H) == 0
+			endStream := false
 			for len(remain) > 0 && err == nil {
 				var allowed int32
 				if allowed, err = ms.awaitFlowControl(len(remain)); err != nil {
@@ -126,11 +166,14 @@ func (ms *MStream) WriteData() (err error) {
 				}
 				data := remain[:allowed]
 				remain = remain[allowed:]
-				err = ms.conn.Framer.writeData(ms.id, false, data)
+				endStream = (len(remain) == 0) && noTrailer
+				err = ms.conn.Framer.writeData(ms.id, endStream, data)
 			}
 		}
 	} else {
 		remain := ms.SendData.Bytes()
+		noTrailer := ms.Trailer == nil || len(ms.Trailer.H) == 0
+		endStream := false
 		for len(remain) > 0 && err == nil {
 			var allowed int32
 			if allowed, err = ms.awaitFlowControl(len(remain)); err != nil {
@@ -138,7 +181,8 @@ func (ms *MStream) WriteData() (err error) {
 			}
 			data := remain[:allowed]
 			remain = remain[allowed:]
-			err = ms.conn.Framer.writeData(ms.id, false, data)
+			endStream = (len(remain) == 0) && noTrailer
+			err = ms.conn.Framer.writeData(ms.id, endStream, data)
 		}
 	}
 	return
@@ -167,22 +211,26 @@ func (ms *MStream) awaitFlowControl(maxBytes int) (taken int32, err error) {
 			ms.flow.take(take)
 			return take, nil
 		}
+		if VerboseLogs {
+			cc.vlogf("http2: stream awaitFlowControl: %v", atomic.AddUint32(&cc.flowCount, 1))
+		}
+
 		cc.cond.Wait()
 	}
 }
 
 func (ms *MStream) WriteTrailers() error {
 	defer ms.conn.closeStream(ms.stream, nil)
-	var tramap http.Header
+	var tramap *TrailerWrapper
 	if ms.Trailer != nil {
-		tramap = *ms.Trailer
+		tramap = ms.Trailer
 	}
 	var trailers []string
 	if tramap != nil {
-		for k, _ := range tramap {
+		for k, _ := range tramap.H {
 			k = http.CanonicalHeaderKey(k)
 			if !httpguts.ValidTrailerHeader(k) {
-				tramap.Del(k)
+				tramap.H.Del(k)
 			} else {
 				trailers = append(trailers, k)
 			}
@@ -193,11 +241,16 @@ func (ms *MStream) WriteTrailers() error {
 	if len(trailers) > 0 {
 		ws := &writeResHeaders{
 			streamID:  ms.id,
-			h:         tramap,
+			h:         tramap.H,
 			trailers:  trailers,
 			endStream: true,
+			decodeBuf: tramap.Buf,
 		}
-		err = ms.conn.writeHeaders(ws)
+		if !skipCompressHttp2Header {
+			err = ms.conn.writeHeaders(ws)
+		} else {
+			err = ms.conn.writeHeadersLockFree(ws)
+		}
 	} else {
 		err = ms.conn.Framer.writeData(ms.id, true, nil)
 
@@ -220,23 +273,32 @@ func (ms *MStream) SendResponse() error {
 	if err := ms.WriteData(); err != nil {
 		return err
 	}
+
+	if ms.Trailer == nil || len(ms.Trailer.H) == 0 {
+		// WriteTrailers close steam
+		ms.conn.closeStream(ms.stream, nil)
+		return nil
+	}
+
 	return ms.WriteTrailers()
 }
 
 type MServerConn struct {
 	serverConn
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	cond *sync.Cond
 
 	Framer *MFramer
 	api.Connection
+
+	flowCount uint32
 }
 
 // NewserverConn returns a Http2 Server Connection
 func NewServerConn(conn api.Connection) *MServerConn {
 	sc := new(MServerConn)
 	sc.Connection = conn
-
+	sc.hs = new(http.Server) // verbose log panic
 	sc.cond = sync.NewCond(&sc.mu)
 
 	// init serverConn
@@ -244,7 +306,7 @@ func NewServerConn(conn api.Connection) *MServerConn {
 	sc.flow.add(initialWindowSize)
 	sc.inflow.add(initialWindowSize)
 
-	sc.advMaxStreams = defaultMaxStreams * 100
+	sc.advMaxStreams = defaultMaxStreams * 1000
 	sc.streams = make(map[uint32]*stream)
 	sc.clientMaxStreams = math.MaxUint32
 	sc.initialStreamSendWindowSize = initialWindowSize
@@ -268,7 +330,7 @@ func NewServerConn(conn api.Connection) *MServerConn {
 func (sc *MServerConn) Init() error {
 	settings := writeSettings{
 		{SettingMaxFrameSize, defaultMaxReadFrameSize},
-		{SettingMaxConcurrentStreams, defaultMaxStreams * 100},
+		{SettingMaxConcurrentStreams, defaultMaxStreams * 1000},
 		{SettingMaxHeaderListSize, http.DefaultMaxHeaderBytes},
 		{SettingInitialWindowSize, uint32(initialConnRecvWindowSize)},
 	}
@@ -289,8 +351,8 @@ func (sc *MServerConn) Init() error {
 }
 
 func (sc *MServerConn) getStream(id uint32) *stream {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
 	return sc.streams[id]
 }
 
@@ -358,7 +420,7 @@ func (sc *MServerConn) writeHeaders(w *writeResHeaders) error {
 		encKV(enc, ":status", httpCodeString(w.httpResCode))
 	}
 
-	encodeHeaders(enc, w.h, w.trailers)
+	encodeHeaders(enc, w.h, w.trailers, false)
 
 	if w.contentType != "" {
 		encKV(enc, "content-type", w.contentType)
@@ -375,26 +437,25 @@ func (sc *MServerConn) writeHeaders(w *writeResHeaders) error {
 		panic("unexpected empty hpack")
 	}
 
-	const maxFrameSize = 16384
-	//const maxFrameSize = 100
+	allowMaxFrameSize := int(sc.maxFrameSize)
 
 	first := true
 	var err error
 	for len(headerBlock) > 0 {
 		frag := headerBlock
-		if len(frag) > maxFrameSize {
-			frag = frag[:maxFrameSize]
+		if len(frag) > allowMaxFrameSize {
+			frag = frag[:allowMaxFrameSize]
 		}
 		headerBlock = headerBlock[len(frag):]
 		if first {
-			err = sc.Framer.writeHeaders(HeadersFrameParam{
+			_, err = sc.Framer.writeHeaders(HeadersFrameParam{
 				StreamID:      w.streamID,
 				BlockFragment: frag,
 				EndStream:     w.endStream,
 				EndHeaders:    len(headerBlock) == 0,
-			})
+			}, true)
 		} else {
-			err = sc.Framer.writeContinuation(w.streamID, len(headerBlock) == 0, frag)
+			_, err = sc.Framer.writeContinuation(w.streamID, len(headerBlock) == 0, frag, true)
 		}
 		first = false
 		if err != nil {
@@ -404,11 +465,85 @@ func (sc *MServerConn) writeHeaders(w *writeResHeaders) error {
 	return nil
 }
 
+func (sc *MServerConn) writeHeadersLockFree(w *writeResHeaders) error {
+
+	var headerBlock []byte
+	if len(w.decodeBuf) > 0 {
+		headerBlock = w.decodeBuf
+	} else {
+
+		coder := hpackPool.Get().(*encoder)
+		defer hpackPool.Put(coder)
+
+		coder.hbuf.Reset()
+
+		enc, buf := coder.henc, coder.hbuf
+
+		if w.httpResCode != 0 {
+			encKV2(enc, ":status", httpCodeString(w.httpResCode), true)
+		}
+
+		encodeHeaders(enc, w.h, w.trailers, true)
+
+		if w.contentType != "" {
+			encKV2(enc, "content-type", w.contentType, true)
+		}
+		if w.contentLength != "" {
+			encKV2(enc, "content-length", w.contentLength, true)
+		}
+		if w.date != "" {
+			encKV2(enc, "date", w.date, true)
+		}
+
+		data := buf.Len()
+		headerBlock = make([]byte, data)
+		copy(headerBlock, buf.Bytes()[:data])
+	}
+
+	if len(headerBlock) == 0 && w.trailers == nil {
+		panic("unexpected empty hpack")
+	}
+
+	allowMaxFrameSize := int(sc.maxFrameSize)
+
+	first := true
+	var err error
+	var ioBuf buffer.IoBuffer
+	var buff = make([]buffer.IoBuffer, 0, 2)
+	for len(headerBlock) > 0 {
+		frag := headerBlock
+		if len(frag) > allowMaxFrameSize {
+			frag = frag[:allowMaxFrameSize]
+		}
+		headerBlock = headerBlock[len(frag):]
+		if first {
+			ioBuf, err = sc.Framer.writeHeaders(HeadersFrameParam{
+				StreamID:      w.streamID,
+				BlockFragment: frag,
+				EndStream:     w.endStream,
+				EndHeaders:    len(headerBlock) == 0,
+			}, false)
+		} else {
+			ioBuf, err = sc.Framer.writeContinuation(w.streamID, len(headerBlock) == 0, frag, false)
+		}
+		first = false
+		if err != nil {
+			return err
+		}
+
+		buff = append(buff, ioBuf)
+	}
+
+	err = sc.Framer.Connection.Write(buff...)
+	return err
+}
+
 // HandleFrame is Http2 Server handles Frame
-func (sc *MServerConn) HandleFrame(ctx context.Context, f Frame) (*MStream, []byte, bool, bool, error) {
+func (sc *MServerConn) HandleFrame(ctx context.Context, f Frame) (*MStream, []byte, *TrailerWrapper, bool, error) {
 	var err error
 	var ms *MStream
-	var endStream, trailer bool
+	var endStream bool
+	var trailer *TrailerWrapper
 	var data []byte
 	switch f := f.(type) {
 	case *SettingsFrame:
@@ -464,15 +599,15 @@ func (sc *MServerConn) HandleError(ctx context.Context, f Frame, err error) {
 }
 
 // processHeaders processes Headers Frame
-func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*MStream, bool, bool, error) {
+func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*MStream, *TrailerWrapper, bool, error) {
 	id := f.StreamID
 	if sc.inGoAway {
 		// Ignore.
-		return nil, false, false, nil
+		return nil, nil, false, nil
 	}
 
 	if id%2 != 1 {
-		return nil, false, false, ConnectionError(ErrCodeProtocol)
+		return nil, nil, false, ConnectionError(ErrCodeProtocol)
 	}
 	// A HEADERS frame can be used to create a new stream or
 	// send a trailer for an open one. If we already have a stream
@@ -482,10 +617,10 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 		if st.resetQueued {
 			// We're sending RST_STREAM to close the stream, so don't bother
 			// processing this frame.
-			return nil, false, false, nil
+			return nil, nil, false, nil
 		}
-		err := st.mprocessTrailerHeaders(ctx, f)
-		return nil, true, true, err
+		trailer, err := st.mprocessTrailerHeaders(ctx, f)
+		return nil, trailer, true, err
 	}
 
 	// [...] The identifier of a newly established stream MUST be
@@ -494,7 +629,7 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 	// receives an unexpected stream identifier MUST respond with
 	// a connection error (Section 5.4.1) of type PROTOCOL_ERROR.
 	if id <= sc.maxClientStreamID {
-		return nil, false, false, ConnectionError(ErrCodeProtocol)
+		return nil, nil, false, ConnectionError(ErrCodeProtocol)
 	}
 	sc.maxClientStreamID = id
 
@@ -507,14 +642,14 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 	if sc.curClientStreams+1 > sc.advMaxStreams {
 		if sc.unackedSettings == 0 {
 			// They should know better.
-			return nil, false, false, streamError(id, ErrCodeProtocol)
+			return nil, nil, false, streamError(id, ErrCodeProtocol)
 		}
 		// Assume it's a network race, where they just haven't
 		// received our last SETTINGS update. But actually
 		// this can't happen yet, because we don't yet provide
 		// a way for users to adjust server parameters at
 		// runtime.
-		return nil, false, false, streamError(id, ErrCodeRefusedStream)
+		return nil, nil, false, streamError(id, ErrCodeRefusedStream)
 	}
 
 	initialState := stateOpen
@@ -530,7 +665,7 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 
 	req, err := sc.processRequest(st, f)
 	if err != nil {
-		return nil, false, false, err
+		return nil, nil, false, err
 	}
 
 	st.reqTrailer = req.Trailer
@@ -539,36 +674,49 @@ func (sc *MServerConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 	}
 	st.declBodyBytes = req.ContentLength
 
-	ms.Request = req
-	return ms, false, f.StreamEnded(), nil
+	ms.Request = &RequestWrapper{Req: req, Buf: f.headerFragBuf}
+
+	return ms, nil, f.StreamEnded(), nil
 }
 
 // mprocessTrailerHeaders Processes trailer headers
-func (st *stream) mprocessTrailerHeaders(ctx context.Context, f *MetaHeadersFrame) error {
+func (st *stream) mprocessTrailerHeaders(ctx context.Context, f *MetaHeadersFrame) (*TrailerWrapper, error) {
 	sc := st.sc
 	if st.gotTrailerHeader {
-		return ConnectionError(ErrCodeProtocol)
+		return nil, ConnectionError(ErrCodeProtocol)
 	}
 	st.gotTrailerHeader = true
 	if !f.StreamEnded() {
-		return streamError(st.id, ErrCodeProtocol)
+		return nil, streamError(st.id, ErrCodeProtocol)
 	}
 
 	if len(f.PseudoFields()) > 0 {
-		return streamError(st.id, ErrCodeProtocol)
+		return nil, streamError(st.id, ErrCodeProtocol)
 	}
 	if st.trailer != nil {
 		for _, hf := range f.RegularFields() {
 			key := sc.canonicalHeader(hf.Name)
 			if !httpguts.ValidTrailerHeader(key) {
-				return streamError(st.id, ErrCodeProtocol)
+				return nil, streamError(st.id, ErrCodeProtocol)
 			}
 			st.trailer[key] = append(st.trailer[key], hf.Value)
 		}
 	}
+
 	st.copyTrailersToHandlerRequest()
 	st.state = stateHalfClosedRemote
-	return nil
+
+	if st.trailer != nil {
+		// trailer containers decode buf
+		trailer := &TrailerWrapper{
+			H:   st.trailer,
+			Buf: f.headerFragBuf,
+		}
+
+		return trailer, nil
+	}
+
+	return nil, nil
 }
 
 // processRequest processes headers frame and build http.Request for Http2 Server
@@ -605,8 +753,9 @@ func (sc *MServerConn) processRequest(st *stream, f *MetaHeadersFrame) (*http.Re
 		return nil, streamError(f.StreamID, ErrCodeProtocol)
 	}
 
-	rp.header = make(http.Header)
-	for _, hf := range f.RegularFields() {
+	fields := f.RegularFields()
+	rp.header = make(http.Header, len(fields))
+	for _, hf := range fields {
 		rp.header.Add(sc.canonicalHeader(hf.Name), hf.Value)
 	}
 	if rp.authority == "" {
@@ -850,7 +999,37 @@ func (sc *MServerConn) processSettings(f *SettingsFrame) error {
 		}
 		return nil
 	}
-	if err := f.ForeachSetting(sc.processSetting); err != nil {
+	err := f.ForeachSetting(func(s Setting) error {
+		switch s.ID {
+		case SettingHeaderTableSize:
+			sc.headerTableSize = s.Val
+			sc.hpackEncoder.SetMaxDynamicTableSize(s.Val)
+		case SettingEnablePush:
+			sc.pushEnabled = s.Val != 0
+		case SettingMaxConcurrentStreams:
+			sc.clientMaxStreams = s.Val
+		case SettingInitialWindowSize:
+			return sc.processSettingInitialWindowSize(s.Val)
+		case SettingMaxFrameSize:
+			sc.maxFrameSize = int32(s.Val) // the maximum valid s.Val is < 2^31
+			sc.Framer.SetMaxReadFrameSize(uint32(sc.maxFrameSize))
+			if VerboseLogs {
+				sc.vlogf("http2: server processing setting maxFrameSize %v", sc.maxFrameSize)
+			}
+		case SettingMaxHeaderListSize:
+			sc.peerMaxHeaderListSize = s.Val
+		default:
+			// Unknown setting: "An endpoint that receives a SETTINGS
+			// frame with any unknown or unsupported identifier MUST
+			// ignore that setting."
+			if VerboseLogs {
+				sc.vlogf("http2: server ignoring unknown setting %v", s)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
 		return err
 	}
 	sc.cond.Broadcast()
@@ -990,12 +1169,12 @@ func (sc *MServerConn) goAway(code ErrCode, debugData []byte) {
 type MClientConn struct {
 	ClientConn
 
-	hmu sync.Mutex
-
 	Framer *MFramer
 	api.Connection
 
 	onceInitFrame sync.Once
+
+	flowCount uint32
 }
 
 // NewClientConn return Http2 Client conncetion
@@ -1033,6 +1212,8 @@ func NewClientConn(conn api.Connection) *MClientConn {
 func (cc *MClientConn) WriteInitFrame() {
 	cc.onceInitFrame.Do(func() {
 		initialSettings := []Setting{
+			{SettingMaxFrameSize, defaultMaxReadFrameSize},
+			{SettingMaxConcurrentStreams, defaultMaxStreams * 1000},
 			{ID: SettingEnablePush, Val: 0},
 			{ID: SettingInitialWindowSize, Val: transportDefaultStreamFlow},
 		}
@@ -1053,48 +1234,243 @@ func (cc *MClientConn) WriteInitFrame() {
 }
 
 // WriteHeaders wirtes Headers Frame for Http2 Client
-func (cc *MClientConn) WriteHeaders(ctx context.Context, req *http.Request, trailers string, endStream bool) (*clientStream, error) {
-	if err := checkConnHeaders(req); err != nil {
+func (cc *MClientConn) WriteHeaders(ctx context.Context, req *RequestWrapper, trailers string, endStream bool) (*clientStream, error) {
+	if err := checkConnHeaders(req.Req); err != nil {
 		return nil, err
 	}
 
-	// StreamId has to be sequential
+	var hdrs []byte
+	var err error
+
+	if !skipCompressHttp2Header {
+		cc.mu.Lock()
+
+		cs := cc.newStream()
+		cs.req = req.Req
+
+		hdrs, err = cc.ClientConn.encodeHeaders(req.Req, false, trailers, req.Req.ContentLength)
+		if err != nil {
+			cc.mu.Unlock()
+			return nil, err
+		}
+
+		err = cc.writeHeaders(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
+		if err != nil {
+			cc.mu.Unlock()
+			return nil, err
+		}
+		// avoid acquire lock again
+		cc.streams[cs.ID] = cs
+		cc.mu.Unlock()
+
+		return cs, nil
+	}
+
+	// lock free
+	hdrs, err = cc.encodeHeadersLockFree(req, false, trailers, req.Req.ContentLength)
+	if err != nil {
+		return nil, err
+	}
+
 	cc.mu.Lock()
-	defer cc.mu.Unlock()
-
 	cs := cc.newStream()
-	cs.req = req
-	cc.hmu.Lock()
-	defer cc.hmu.Unlock()
-	hdrs, err := cc.encodeHeaders(req, false, trailers, req.ContentLength)
+	cs.req = req.Req
 
+	err = cc.writeHeadersLockFree(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
 	if err != nil {
-		return nil, err
-	}
-	err = cc.writeHeaders(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
-	if err != nil {
+		cc.mu.Unlock()
 		return nil, err
 	}
 
 	cc.streams[cs.ID] = cs
+	cc.mu.Unlock()
+
 	return cs, nil
+}
+
+func (cc *MClientConn) encodeHeadersLockFree(wrap *RequestWrapper, addGzipHeader bool, trailers string, contentLength int64) ([]byte, error) {
+
+	// fast write header decoded buff
+	if len(wrap.Buf) > 0 {
+		return wrap.Buf, nil
+	}
+
+	req := wrap.Req
+
+	host := req.Host
+	if host == "" {
+		host = req.URL.Host
+	}
+	host, err := httpguts.PunycodeHostPort(host)
+	if err != nil {
+		return nil, err
+	}
+
+	var path string
+	if req.Method != "CONNECT" {
+		path = req.URL.RequestURI()
+		if !validPseudoPath(path) {
+			orig := path
+			path = strings.TrimPrefix(path, req.URL.Scheme+"://"+host)
+			if !validPseudoPath(path) {
+				if req.URL.Opaque != "" {
+					return nil, fmt.Errorf("invalid request :path %q from URL.Opaque = %q", orig, req.URL.Opaque)
+				} else {
+					return nil, fmt.Errorf("invalid request :path %q", orig)
+				}
+			}
+		}
+	}
+
+	// Check for any invalid headers and return an error before we
+	// potentially pollute our hpack state. (We want to be able to
+	// continue to reuse the hpack encoder for future requests)
+	for k, vv := range req.Header {
+		if !httpguts.ValidHeaderFieldName(k) {
+			return nil, fmt.Errorf("invalid HTTP header name %q", k)
+		}
+		for _, v := range vv {
+			if !httpguts.ValidHeaderFieldValue(v) {
+				return nil, fmt.Errorf("invalid HTTP header value %q for header %q", v, k)
+			}
+		}
+	}
+
+	enumerateHeaders := func(f func(name, value string)) {
+		// 8.1.2.3 Request Pseudo-Header Fields
+		// The :path pseudo-header field includes the path and query parts of the
+		// target URI (the path-absolute production and optionally a '?' character
+		// followed by the query production (see Sections 3.3 and 3.4 of
+		// [RFC3986]).
+		f(":authority", host)
+		f(":method", req.Method)
+		if req.Method != "CONNECT" {
+			f(":path", path)
+			f(":scheme", req.URL.Scheme)
+		}
+		if trailers != "" {
+			f("trailer", trailers)
+		}
+
+		var didUA bool
+		for k, vv := range req.Header {
+			if strings.EqualFold(k, "host") || strings.EqualFold(k, "content-length") {
+				// Host is :authority, already sent.
+				// Content-Length is automatic, set below.
+				continue
+			} else if strings.EqualFold(k, "connection") || strings.EqualFold(k, "proxy-connection") ||
+				strings.EqualFold(k, "transfer-encoding") || strings.EqualFold(k, "upgrade") ||
+				strings.EqualFold(k, "keep-alive") {
+				// Per 8.1.2.2 Connection-Specific Header
+				// Fields, don't send connection-specific
+				// fields. We have already checked if any
+				// are error-worthy so just ignore the rest.
+				continue
+			} else if strings.EqualFold(k, "user-agent") {
+				// Match Go's http1 behavior: at most one
+				// User-Agent. If set to nil or empty string,
+				// then omit it. Otherwise if not mentioned,
+				// include the default (below).
+				didUA = true
+				if len(vv) < 1 {
+					continue
+				}
+				vv = vv[:1]
+				if vv[0] == "" {
+					continue
+				}
+
+			}
+
+			for _, v := range vv {
+				f(k, v)
+			}
+		}
+		if shouldSendReqContentLength(req.Method, contentLength) {
+			f("content-length", strconv.FormatInt(contentLength, 10))
+		}
+		if addGzipHeader {
+			f("accept-encoding", "gzip")
+		}
+		if !didUA {
+			f("user-agent", defaultUserAgent)
+		}
+	}
+
+	enc := hpackPool.Get().(*encoder)
+	defer hpackPool.Put(enc)
+
+	enc.hbuf.Reset()
+
+	hbuf := enc.hbuf
+	henc := enc.henc
+
+	trace := httptrace.ContextClientTrace(req.Context())
+	traceHeaders := traceHasWroteHeaderField(trace)
+
+	hlSize := uint64(0)
+	enumerateHeaders(func(name, value string) {
+		// rfc: https://datatracker.ietf.org/doc/html/rfc7540#section-8.1.2
+		//  Just as in HTTP/1.x, header field names are strings of ASCII
+		//   characters that are compared in a case-insensitive fashion.  However,
+		//   header field names MUST be converted to lowercase prior to their
+		//   encoding in HTTP/2.
+		name = strings.ToLower(name)
+
+		hf := hpack.HeaderField{Name: name, Value: value, Sensitive: skipCompressHttp2Header}
+		hlSize += uint64(hf.Size())
+
+		_ = henc.WriteField(hf)
+		if traceHeaders {
+			traceWroteHeaderField(trace, name, value)
+		}
+	})
+
+	if hlSize > cc.peerMaxHeaderListSize {
+		return nil, errRequestHeaderListSize
+	}
+
+	data := hbuf.Len()
+	writes := make([]byte, data)
+	// write is async loop, we must copy data
+	copy(writes, hbuf.Bytes()[:data])
+
+	return writes, nil
+}
+
+type RequestWrapper struct {
+	Req *http.Request
+	Buf []byte // don't clone, only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
+}
+
+type ResponseWrapper struct {
+	Rsp *http.Response
+	Buf []byte // don't clone, only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
+}
+
+type TrailerWrapper struct {
+	H   http.Header
+	Buf []byte // don't clone, only works SKIP_COMPRESS_HTTP2_HEADER_FOR_PERFORMANCE=true
 }
 
 // MClientStream is Http2 Client Stream
 type MClientStream struct {
 	*clientStream
 	conn       *MClientConn
-	Request    *http.Request
+	Request    *RequestWrapper
 	SendData   buffer.IoBuffer
-	Trailer    *http.Header
+	Trailer    *TrailerWrapper
 	UseStream  bool
 	sendHeader bool
 }
 
-func NewMClientStream(conn *MClientConn, req *http.Request) *MClientStream {
+func NewMClientStream(conn *MClientConn, req *http.Request, buf []byte) *MClientStream {
 	return &MClientStream{
-		conn:    conn,
-		Request: req,
+		conn: conn,
+		Request: &RequestWrapper{
+			Req: req,
+			Buf: buf,
+		},
 	}
 }
 
@@ -1108,8 +1484,8 @@ func (cc *MClientStream) RoundTrip(ctx context.Context) (err error) {
 	if !cc.sendHeader {
 		cc.sendHeader = true
 		//write header
-		if cl, ok := cc.Request.Header["Content-Length"]; ok {
-			cc.Request.ContentLength, _ = strconv.ParseInt(cl[0], 10, 64)
+		if cl, ok := cc.Request.Req.Header["Content-Length"]; ok {
+			cc.Request.Req.ContentLength, _ = strconv.ParseInt(cl[0], 10, 64)
 		}
 
 		endStream := cc.SendData == nil && cc.Trailer == nil
@@ -1162,6 +1538,8 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 				return err
 			}
 			remain := buf[:n]
+			endStream := false
+			noTrailer := cc.Trailer == nil || len(cc.Trailer.H) == 0
 			for len(remain) > 0 {
 				var allowed int32
 				if allowed, err = cc.awaitFlowControl(len(remain)); err != nil {
@@ -1169,13 +1547,16 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 				}
 				data := remain[:allowed]
 				remain = remain[allowed:]
-				if err = conn.Framer.writeData(cc.ID, false, data); err != nil {
+				endStream = len(remain) == 0 && noTrailer
+				if err = conn.Framer.writeData(cc.ID, endStream, data); err != nil {
 					return err
 				}
 			}
 		}
 	} else {
 		remain := cc.SendData.Bytes()
+		endStream := false
+		noTrailer := cc.Trailer == nil || len(cc.Trailer.H) == 0
 		for len(remain) > 0 {
 			var allowed int32
 			if allowed, err = cc.awaitFlowControl(len(remain)); err != nil {
@@ -1184,33 +1565,57 @@ func (cc *MClientStream) writeDataAndTrailer() (err error) {
 			}
 			data := remain[:allowed]
 			remain = remain[allowed:]
-			if err = conn.Framer.writeData(cc.ID, false, data); err != nil {
+
+			endStream = len(remain) == 0 && noTrailer
+			if err = conn.Framer.writeData(cc.ID, endStream, data); err != nil {
 				return err
+			}
+
+			if endStream {
+				return
 			}
 		}
 	}
 
 	//write trailer
-	if cc.Trailer == nil || len(*cc.Trailer) == 0 {
+	if cc.Trailer == nil || len(cc.Trailer.H) == 0 {
 		err = cc.conn.Framer.writeData(cc.ID, true, nil)
 		if err != nil {
 			return
 		}
 	} else {
-		cc.Request.Trailer = *cc.Trailer
+		cc.Request.Req.Trailer = cc.Trailer.H
 
-		cc.conn.hmu.Lock()
-		defer cc.conn.hmu.Unlock()
-		var trls []byte
-		trls, err = cc.conn.encodeTrailers(cc.Request)
-		if err != nil {
-			log.DefaultLogger.Errorf("[Stream H2] [Client] Encode trailer error: %v", err)
-			return
+		if !skipCompressHttp2Header {
+			cc.conn.mu.Lock()
+			var trls []byte
+			trls, err = cc.conn.encodeTrailers(cc.Request.Req)
+			if err != nil {
+				cc.conn.mu.Unlock()
+				log.DefaultLogger.Errorf("[Stream H2] [Client] Encode trailer error: %v", err)
+				return
+			}
+			err = cc.conn.writeHeaders(cc.ID, true, int(cc.conn.maxFrameSize), trls)
+			if err != nil {
+				cc.conn.mu.Unlock()
+				return
+			}
+			cc.conn.mu.Unlock()
+		} else {
+
+			var trls []byte
+			trls, err = cc.conn.encodeTrailersLockFree(cc.Trailer)
+			if err != nil {
+				log.DefaultLogger.Errorf("[Stream H2] [Client] Encode trailer error: %v", err)
+				return
+			}
+			err = cc.conn.writeHeadersLockFree(cc.ID, true, int(cc.conn.maxFrameSize), trls)
+			if err != nil {
+				return
+			}
+
 		}
-		err = cc.conn.writeHeaders(cc.ID, true, int(cc.conn.maxFrameSize), trls)
-		if err != nil {
-			return
-		}
+
 	}
 	return
 }
@@ -1241,6 +1646,11 @@ func (cs *MClientStream) awaitFlowControl(maxBytes int) (taken int32, err error)
 			cs.flow.take(take)
 			return take, nil
 		}
+
+		if VerboseLogs {
+			cc.vlogf("http2: client stream flow: %v", atomic.AddUint32(&cc.flowCount, 1))
+		}
+
 		cc.cond.Wait()
 	}
 }
@@ -1269,15 +1679,15 @@ func (cc *MClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSiz
 		hdrs = hdrs[len(chunk):]
 		endHeaders := len(hdrs) == 0
 		if first {
-			err = cc.Framer.writeHeaders(HeadersFrameParam{
+			_, err = cc.Framer.writeHeaders(HeadersFrameParam{
 				StreamID:      streamID,
 				BlockFragment: chunk,
 				EndStream:     endStream,
 				EndHeaders:    endHeaders,
-			})
+			}, true)
 			first = false
 		} else {
-			err = cc.Framer.writeContinuation(streamID, endHeaders, chunk)
+			_, err = cc.Framer.writeContinuation(streamID, endHeaders, chunk, true)
 		}
 
 		if err != nil {
@@ -1285,6 +1695,42 @@ func (cc *MClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSiz
 		}
 	}
 	return nil
+}
+
+func (cc *MClientConn) writeHeadersLockFree(streamID uint32, endStream bool, maxFrameSize int, hdrs []byte) error {
+	first := true // first frame written (HEADERS is first, then CONTINUATION)
+
+	var err error
+	var ioBuf buffer.IoBuffer
+	var buff = make([]buffer.IoBuffer, 0, 2)
+	for len(hdrs) > 0 {
+		chunk := hdrs
+		if len(chunk) > maxFrameSize {
+			chunk = chunk[:maxFrameSize]
+		}
+		hdrs = hdrs[len(chunk):]
+		endHeaders := len(hdrs) == 0
+		if first {
+			ioBuf, err = cc.Framer.writeHeaders(HeadersFrameParam{
+				StreamID:      streamID,
+				BlockFragment: chunk,
+				EndStream:     endStream,
+				EndHeaders:    endHeaders,
+			}, false)
+			first = false
+		} else {
+			ioBuf, err = cc.Framer.writeContinuation(streamID, endHeaders, chunk, false)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		buff = append(buff, ioBuf)
+	}
+
+	err = cc.Framer.Connection.Write(buff...)
+	return err
 }
 
 // must lock
@@ -1298,7 +1744,10 @@ func (cc *MClientConn) newStream() *clientStream {
 	cs.inflow.add(transportDefaultStreamFlow)
 	cs.inflow.setConnFlow(&cc.inflow)
 	cs.done = make(chan struct{})
+
+	// StreamId has to be sequential
 	cc.nextStreamID += 2
+
 	return cs
 }
 
@@ -1320,12 +1769,12 @@ func (cc *MClientConn) HandleError(ctx context.Context, streamId uint32, err err
 }
 
 // HandlerFrame handles Frame for Http2 Client
-func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*http.Response, []byte, http.Header, bool, uint32, error) {
+func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*ResponseWrapper, []byte, *TrailerWrapper, bool, uint32, error) {
 	var err error
 	var data []byte
 	var endStream bool
-	var trailer http.Header
-	var rsp *http.Response
+	var trailer *TrailerWrapper
+	var rsp *ResponseWrapper
 	var lastStream uint32
 
 	switch f := f.(type) {
@@ -1370,7 +1819,7 @@ func (sc *MClientConn) HandleFrame(ctx context.Context, f Frame) (*http.Response
 }
 
 // processHeaders processes headers Frame for Http2 Client
-func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*http.Response, http.Header, bool, error) {
+func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) (*ResponseWrapper, *TrailerWrapper, bool, error) {
 	cs := cc.streamByID(f.StreamID, f.StreamEnded())
 	if cs == nil {
 		return nil, nil, false, nil
@@ -1397,12 +1846,19 @@ func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 			return nil, nil, false, ConnectionError(ErrCodeProtocol)
 		}
 
-		trailer := make(http.Header)
-		for _, hf := range f.RegularFields() {
+		fields := f.RegularFields()
+		trailer := make(http.Header, len(fields))
+		for _, hf := range fields {
 			key := http.CanonicalHeaderKey(hf.Name)
 			trailer[key] = append(trailer[key], hf.Value)
 		}
-		return nil, trailer, true, nil
+
+		tt := &TrailerWrapper{
+			H:   trailer,
+			Buf: f.headerFragBuf,
+		}
+
+		return nil, tt, true, nil
 	}
 
 	res, err := cc.handleResponse(cs, f)
@@ -1411,7 +1867,7 @@ func (cc *MClientConn) processHeaders(ctx context.Context, f *MetaHeadersFrame) 
 }
 
 // handleResponse returns http.Response
-func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*http.Response, error) {
+func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*ResponseWrapper, error) {
 	if f.Truncated {
 		return nil, errResponseHeaderListSize
 	}
@@ -1426,20 +1882,22 @@ func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*h
 	}
 
 	header := make(http.Header)
-	res := &http.Response{
-		Proto:      "HTTP/2.0",
-		ProtoMajor: 2,
-		Header:     header,
-		StatusCode: statusCode,
-		Status:     status + " " + http.StatusText(statusCode),
+	wrap := &ResponseWrapper{
+		Rsp: &http.Response{
+			Proto:      "HTTP/2.0",
+			ProtoMajor: 2,
+			Header:     header,
+			StatusCode: statusCode,
+			Status:     status + " " + http.StatusText(statusCode),
+		}, Buf: f.headerFragBuf,
 	}
 	for _, hf := range f.RegularFields() {
 		key := http.CanonicalHeaderKey(hf.Name)
 		if key == "Trailer" {
-			t := res.Trailer
+			t := wrap.Rsp.Trailer
 			if t == nil {
 				t = make(http.Header)
-				res.Trailer = t
+				wrap.Rsp.Trailer = t
 			}
 			foreachHeaderElement(hf.Value, func(v string) {
 				t[http.CanonicalHeaderKey(v)] = nil
@@ -1452,10 +1910,10 @@ func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*h
 	streamEnded := f.StreamEnded()
 	isHead := cs.req.Method == "HEAD"
 	if !streamEnded || isHead {
-		res.ContentLength = -1
-		if clens := res.Header["Content-Length"]; len(clens) == 1 {
+		wrap.Rsp.ContentLength = -1
+		if clens := wrap.Rsp.Header["Content-Length"]; len(clens) == 1 {
 			if clen64, err := strconv.ParseInt(clens[0], 10, 64); err == nil {
-				res.ContentLength = clen64
+				wrap.Rsp.ContentLength = clen64
 			} else {
 				// TODO: care? unlike http/1, it won't mess up our framing, so it's
 				// more safe smuggling-wise to ignore.
@@ -1466,7 +1924,7 @@ func (cc *MClientConn) handleResponse(cs *clientStream, f *MetaHeadersFrame) (*h
 		}
 	}
 
-	return res, nil
+	return wrap, nil
 }
 
 // processData processes Data Frame for Http2 Client
@@ -1592,6 +2050,10 @@ func (cc *MClientConn) processSettings(f *SettingsFrame) error {
 		switch s.ID {
 		case SettingMaxFrameSize:
 			cc.maxFrameSize = s.Val
+			cc.Framer.SetMaxReadFrameSize(cc.maxFrameSize)
+			if VerboseLogs {
+				cc.vlogf("http2: client processing setting maxFrameSize %v", cc.maxFrameSize)
+			}
 		case SettingMaxConcurrentStreams:
 			cc.maxConcurrentStreams = s.Val
 		case SettingMaxHeaderListSize:
@@ -1613,6 +2075,11 @@ func (cc *MClientConn) processSettings(f *SettingsFrame) error {
 				cs.flow.add(delta)
 			}
 			cc.initialWindowSize = s.Val
+
+			if VerboseLogs {
+				cc.vlogf("http2: client processing setting initialWindowSize %v", cc.initialWindowSize)
+			}
+
 		default:
 		}
 		return nil
@@ -1780,8 +2247,7 @@ func (fr *MFramer) writeWindowUpdate(streamID, incr uint32) error {
 
 // WriteData writes Data Frame
 func (fr *MFramer) writeData(streamID uint32, endStream bool, data []byte) error {
-	const maxFrameSize = 16384
-	//const maxFrameSize = 100
+	allowMaxFrameSize := int(fr.maxReadSize)
 	var err error
 	if data == nil {
 		err = fr.sendData(streamID, endStream, nil)
@@ -1789,8 +2255,8 @@ func (fr *MFramer) writeData(streamID uint32, endStream bool, data []byte) error
 	}
 	for len(data) > 0 {
 		frag := data
-		if len(frag) > maxFrameSize {
-			frag = frag[:maxFrameSize]
+		if len(frag) > allowMaxFrameSize {
+			frag = frag[:allowMaxFrameSize]
 		}
 		data = data[len(frag):]
 		if len(data) > 0 {
@@ -1821,9 +2287,9 @@ func (fr *MFramer) sendData(streamID uint32, endStream bool, data []byte) error 
 }
 
 // WriteContinuation writes Continuation Frame
-func (fr *MFramer) writeContinuation(streamID uint32, endHeaders bool, headerBlockFragment []byte) error {
+func (fr *MFramer) writeContinuation(streamID uint32, endHeaders bool, headerBlockFragment []byte, conn bool) (buffer.IoBuffer, error) {
 	if !validStreamID(streamID) {
-		return errStreamID
+		return nil, errStreamID
 	}
 	var flags Flags
 	buf := buffer.NewIoBuffer(len(headerBlockFragment) + frameHeaderLen)
@@ -1832,13 +2298,14 @@ func (fr *MFramer) writeContinuation(streamID uint32, endHeaders bool, headerBlo
 	}
 	fr.startWrite(buf, FrameContinuation, flags, streamID)
 	buf.Write(headerBlockFragment)
-	return fr.endWrite(buf)
+	err := fr.endWriteConn(buf, conn)
+	return buf, err
 }
 
 // WriteHeaders writes headers Frame
-func (fr *MFramer) writeHeaders(p HeadersFrameParam) error {
+func (fr *MFramer) writeHeaders(p HeadersFrameParam, conn bool) (buffer.IoBuffer, error) {
 	if !validStreamID(p.StreamID) {
-		return errStreamID
+		return nil, errStreamID
 	}
 	var flags Flags
 	buf := buffer.GetIoBuffer(len(p.BlockFragment) + frameHeaderLen + 8)
@@ -1861,7 +2328,7 @@ func (fr *MFramer) writeHeaders(p HeadersFrameParam) error {
 	if !p.Priority.IsZero() {
 		v := p.Priority.StreamDep
 		if !validStreamIDOrZero(v) {
-			return errDepStreamID
+			return nil, errDepStreamID
 		}
 		if p.Priority.Exclusive {
 			v |= 1 << 31
@@ -1871,7 +2338,8 @@ func (fr *MFramer) writeHeaders(p HeadersFrameParam) error {
 	}
 	buf.Write(p.BlockFragment)
 	buf.Write(padZeros[:p.PadLength])
-	return fr.endWrite(buf)
+	err := fr.endWriteConn(buf, conn)
+	return buf, err
 }
 
 func (fr *MFramer) writeByte(b buffer.IoBuffer, v byte)     { b.Write([]byte{v}) }
@@ -1912,6 +2380,24 @@ func (fr *MFramer) endWrite(buf buffer.IoBuffer) error {
 	return fr.Connection.Write(buf)
 }
 
+func (fr *MFramer) endWriteConn(buf buffer.IoBuffer, conn bool) error {
+	// Now that we know the final size, fill in the FrameHeader in
+	// the space previously reserved for it. Abuse append.
+	length := buf.Len() - frameHeaderLen
+	if length >= (1 << 24) {
+		return ErrFrameTooLarge
+	}
+	header := buf.Bytes()
+	header[0] = byte(length >> 16)
+	header[1] = byte(length >> 8)
+	header[2] = byte(length)
+	if conn {
+		return fr.Connection.Write(buf)
+	}
+
+	return nil
+}
+
 func (fr *MFramer) readFrameHeader(ctx context.Context, data buffer.IoBuffer, off int) (FrameHeader, error) {
 	if data.Len() < off+frameHeaderLen {
 		return FrameHeader{}, ErrAGAIN
@@ -1927,16 +2413,19 @@ func (fr *MFramer) readFrameHeader(ctx context.Context, data buffer.IoBuffer, of
 }
 
 func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buffer.IoBuffer, off int) (*MetaHeadersFrame, int, error) {
+
 	mh := &MetaHeadersFrame{
 		HeadersFrame: hf,
+		Fields:       make([]hpack.HeaderField, 0, 8),
 	}
 
 	var hc headersOrContinuation = hf
-	frag := make([][]byte, 1)
+	frag := make([][]byte, 0, 1)
+	tsize := 0
 	msize := 0
 	for {
 		frag = append(frag, hc.HeaderBlockFragment())
-
+		tsize += len(frag)
 		if hc.HeadersEnded() {
 			break
 		}
@@ -1989,13 +2478,31 @@ func (fr *MFramer) readMetaFrame(ctx context.Context, hf *HeadersFrame, data buf
 	// Lose reference to MetaHeadersFrame:
 	defer hdec.SetEmitFunc(func(hf hpack.HeaderField) {})
 
-	for _, f := range frag {
-		if _, err := hdec.Write(f); err != nil {
+	if !skipCompressHttp2Header {
+		for _, f := range frag {
+			if _, err := hdec.Write(f); err != nil {
+				if _, err := hdec.Write(f); err != nil && !errors.Is(err, hpack.ErrNeedMore) {
+					return nil, 0, ConnectionError(ErrCodeCompression)
+				}
+			}
+		}
+
+		mh.HeadersFrame.headerFragBuf = nil
+	} else {
+		// The packet is forwarded directly to upstream
+		frames := make([]byte, 0, tsize)
+		for _, f := range frag {
+			frames = append(frames, f...)
+		}
+
+		r, err := hdec.WriteFull(frames, skipCompressHttp2Header)
+		if err != nil {
 			return nil, 0, ConnectionError(ErrCodeCompression)
 		}
-	}
 
-	mh.HeadersFrame.headerFragBuf = nil
+		// skipCompressHttp2Header enabled, headerFragBuf contains full transform data
+		mh.HeadersFrame.headerFragBuf = r
+	}
 
 	if err := hdec.Close(); err != nil {
 		return nil, 0, ConnectionError(ErrCodeCompression)

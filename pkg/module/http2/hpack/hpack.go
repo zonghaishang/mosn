@@ -89,6 +89,8 @@ type Decoder struct {
 	// process it under Write.
 	buf []byte // not owned; only valid during Write
 
+	rewrite []byte // generate redirect data; only valid during write full
+
 	// saveBuf is previous data passed to Write which we weren't able
 	// to fully parse before. Unlike buf, we own this data.
 	saveBuf bytes.Buffer
@@ -259,8 +261,8 @@ func (d *Decoder) Write(p []byte) (n int, err error) {
 	}
 
 	for len(d.buf) > 0 {
-		err = d.parseHeaderFieldRepr()
-		if err == errNeedMore {
+		err = d.parseHeaderFieldRepr(false)
+		if err == ErrNeedMore {
 			// Extra paranoia, making sure saveBuf won't
 			// get too large. All the varint and string
 			// reading code earlier should already catch
@@ -281,10 +283,56 @@ func (d *Decoder) Write(p []byte) (n int, err error) {
 	return len(p), err
 }
 
+func (d *Decoder) WriteFull(p []byte, rewrite bool) (r []byte, err error) {
+	if len(p) == 0 {
+		// Prevent state machine CPU attacks (making us redo
+		// work up to the point of finding out we don't have
+		// enough data)
+		return
+	}
+
+	if rewrite {
+		d.rewrite = make([]byte, 0, len(p))
+	}
+
+	// Only copy the data if we have to. Optimistically assume
+	// that p will contain a complete header block.
+	if d.saveBuf.Len() == 0 {
+		d.buf = p
+	} else {
+		d.saveBuf.Write(p)
+		d.buf = d.saveBuf.Bytes()
+		d.saveBuf.Reset()
+	}
+
+	for len(d.buf) > 0 {
+		err = d.parseHeaderFieldRepr(rewrite)
+		if err == ErrNeedMore {
+			// Extra paranoia, making sure saveBuf won't
+			// get too large. All the varint and string
+			// reading code earlier should already catch
+			// overlong things and return ErrStringLength,
+			// but keep this as a last resort.
+			const varIntOverhead = 8 // conservative
+			if d.maxStrLen != 0 && int64(len(d.buf)) > 2*(int64(d.maxStrLen)+varIntOverhead) {
+				return d.rewrite, ErrStringLength
+			}
+			d.saveBuf.Write(d.buf)
+			return d.rewrite, nil
+		}
+		d.firstField = false
+		if err != nil {
+			break
+		}
+	}
+	return d.rewrite, err
+}
+
 // errNeedMore is an internal sentinel error value that means the
+// ErrNeedMore is an internal sentinel error value that means the
 // buffer is truncated and we need to read more data before we can
 // continue parsing.
-var errNeedMore = errors.New("need more data")
+var ErrNeedMore = errors.New("need more data")
 
 type indexType int
 
@@ -297,33 +345,33 @@ const (
 func (v indexType) indexed() bool   { return v == indexedTrue }
 func (v indexType) sensitive() bool { return v == indexedNever }
 
-// returns errNeedMore if there isn't enough data available.
+// returns ErrNeedMore if there isn't enough data available.
 // any other error is fatal.
 // consumes d.buf iff it returns nil.
 // precondition: must be called with len(d.buf) > 0
-func (d *Decoder) parseHeaderFieldRepr() error {
+func (d *Decoder) parseHeaderFieldRepr(rewrite bool) error {
 	b := d.buf[0]
 	switch {
 	case b&128 != 0:
 		// Indexed representation.
 		// High bit set?
 		// http://http2.github.io/http2-spec/compression.html#rfc.section.6.1
-		return d.parseFieldIndexed()
+		return d.parseFieldIndexed(rewrite)
 	case b&192 == 64:
 		// 6.2.1 Literal Header Field with Incremental Indexing
 		// 0b10xxxxxx: top two bits are 10
 		// http://http2.github.io/http2-spec/compression.html#rfc.section.6.2.1
-		return d.parseFieldLiteral(6, indexedTrue)
+		return d.parseFieldLiteral(6, indexedTrue, rewrite)
 	case b&240 == 0:
 		// 6.2.2 Literal Header Field without Indexing
 		// 0b0000xxxx: top four bits are 0000
 		// http://http2.github.io/http2-spec/compression.html#rfc.section.6.2.2
-		return d.parseFieldLiteral(4, indexedFalse)
+		return d.parseFieldLiteral(4, indexedFalse, rewrite)
 	case b&240 == 16:
 		// 6.2.3 Literal Header Field never Indexed
 		// 0b0001xxxx: top four bits are 0001
 		// http://http2.github.io/http2-spec/compression.html#rfc.section.6.2.3
-		return d.parseFieldLiteral(4, indexedNever)
+		return d.parseFieldLiteral(4, indexedNever, rewrite)
 	case b&224 == 32:
 		// 6.3 Dynamic Table Size Update
 		// Top three bits are '001'.
@@ -335,9 +383,10 @@ func (d *Decoder) parseHeaderFieldRepr() error {
 }
 
 // (same invariants and behavior as parseHeaderFieldRepr)
-func (d *Decoder) parseFieldIndexed() error {
+func (d *Decoder) parseFieldIndexed(rewrite bool) error {
 	buf := d.buf
-	idx, buf, err := readVarInt(7, buf)
+	old := d.buf
+	idx, c, buf, err := readVarInt(7, buf)
 	if err != nil {
 		return err
 	}
@@ -346,17 +395,38 @@ func (d *Decoder) parseFieldIndexed() error {
 		return DecodingError{InvalidIndexError(idx)}
 	}
 	d.buf = buf
+
+	if rewrite {
+		if idx <= staticTableLen {
+			d.rewrite = append(d.rewrite, old[0:c]...)
+		} else {
+
+			d.rewrite = append(d.rewrite, 0x10)
+
+			d.rewrite = appendVarInt(d.rewrite, 7, uint64(len(hf.Name)))
+			d.rewrite = append(d.rewrite, hf.Name...)
+			d.rewrite = appendVarInt(d.rewrite, 7, uint64(len(hf.Value)))
+			d.rewrite = append(d.rewrite, hf.Value...)
+		}
+	}
+
 	return d.callEmit(HeaderField{Name: hf.Name, Value: hf.Value})
 }
 
 // (same invariants and behavior as parseHeaderFieldRepr)
-func (d *Decoder) parseFieldLiteral(n uint8, it indexType) error {
+func (d *Decoder) parseFieldLiteral(n uint8, it indexType, rewrite bool) error {
 	buf := d.buf
-	nameIdx, buf, err := readVarInt(n, buf)
+	old := d.buf
+	nameIdx, c, buf, err := readVarInt(n, buf)
 	if err != nil {
 		return err
 	}
 
+	if rewrite {
+		d.rewrite = append(d.rewrite, 0x10)
+	}
+
+	var cc, dc uint64
 	var hf HeaderField
 	wantStr := d.emitEnabled || it.indexed()
 	if nameIdx > 0 {
@@ -365,16 +435,26 @@ func (d *Decoder) parseFieldLiteral(n uint8, it indexType) error {
 			return DecodingError{InvalidIndexError(nameIdx)}
 		}
 		hf.Name = ihf.Name
+
+		if rewrite {
+			d.rewrite = appendVarInt(d.rewrite, 7, uint64(len(hf.Name)))
+			d.rewrite = append(d.rewrite, hf.Name...)
+		}
 	} else {
-		hf.Name, buf, err = d.readString(buf, wantStr)
+		hf.Name, cc, buf, err = d.readString(buf, wantStr)
 		if err != nil {
 			return err
 		}
 	}
-	hf.Value, buf, err = d.readString(buf, wantStr)
+	hf.Value, dc, buf, err = d.readString(buf, wantStr)
 	if err != nil {
 		return err
 	}
+
+	if rewrite {
+		d.rewrite = append(d.rewrite, old[c:c+cc+dc]...)
+	}
+
 	d.buf = buf
 	if it.indexed() {
 		d.dynTab.add(hf)
@@ -404,7 +484,7 @@ func (d *Decoder) parseDynamicTableSizeUpdate() error {
 	}
 
 	buf := d.buf
-	size, buf, err := readVarInt(5, buf)
+	size, _, buf, err := readVarInt(5, buf)
 	if err != nil {
 		return err
 	}
@@ -426,20 +506,22 @@ var errVarintOverflow = DecodingError{errors.New("varint integer overflow")}
 //
 // The returned remain buffer is either a smaller suffix of p, or err != nil.
 // The error is errNeedMore if p doesn't contain a complete integer.
-func readVarInt(n byte, p []byte) (i uint64, remain []byte, err error) {
+func readVarInt(n byte, p []byte) (i uint64, c uint64, remain []byte, err error) {
 	if n < 1 || n > 8 {
 		panic("bad n")
 	}
 	if len(p) == 0 {
-		return 0, p, errNeedMore
+		return 0, 0, p, ErrNeedMore
 	}
 	i = uint64(p[0])
 	if n < 8 {
 		i &= (1 << uint64(n)) - 1
 	}
 	if i < (1<<uint64(n))-1 {
-		return i, p[1:], nil
+		return i, 1, p[1:], nil
 	}
+
+	c = 1
 
 	origP := p
 	p = p[1:]
@@ -448,15 +530,16 @@ func readVarInt(n byte, p []byte) (i uint64, remain []byte, err error) {
 		b := p[0]
 		p = p[1:]
 		i += uint64(b&127) << m
+		c = c + 1 // consume next byte
 		if b&128 == 0 {
-			return i, p, nil
+			return i, c, p, nil
 		}
 		m += 7
 		if m >= 63 { // TODO: proper overflow check. making this up.
-			return 0, origP, errVarintOverflow
+			return 0, 0, origP, errVarintOverflow
 		}
 	}
-	return 0, origP, errNeedMore
+	return 0, 0, origP, ErrNeedMore
 }
 
 // readString decodes an hpack string from p.
@@ -467,26 +550,26 @@ func readVarInt(n byte, p []byte) (i uint64, remain []byte, err error) {
 // strings past the MAX_HEADER_LIST_SIZE are ignored, but the server
 // is returning an error anyway, and because they're not indexed, the error
 // won't affect the decoding state.
-func (d *Decoder) readString(p []byte, wantStr bool) (s string, remain []byte, err error) {
+func (d *Decoder) readString(p []byte, wantStr bool) (s string, c uint64, remain []byte, err error) {
 	if len(p) == 0 {
-		return "", p, errNeedMore
+		return "", 0, p, ErrNeedMore
 	}
 	isHuff := p[0]&128 != 0
-	strLen, p, err := readVarInt(7, p)
+	strLen, c, p, err := readVarInt(7, p)
 	if err != nil {
-		return "", p, err
+		return "", 0, p, err
 	}
 	if d.maxStrLen != 0 && strLen > uint64(d.maxStrLen) {
-		return "", nil, ErrStringLength
+		return "", 0, nil, ErrStringLength
 	}
 	if uint64(len(p)) < strLen {
-		return "", p, errNeedMore
+		return "", 0, p, ErrNeedMore
 	}
 	if !isHuff {
 		if wantStr {
 			s = string(p[:strLen])
 		}
-		return s, p[strLen:], nil
+		return s, c + strLen, p[strLen:], nil
 	}
 
 	if wantStr {
@@ -495,10 +578,10 @@ func (d *Decoder) readString(p []byte, wantStr bool) (s string, remain []byte, e
 		defer bufPool.Put(buf)
 		if err := huffmanDecode(buf, d.maxStrLen, p[:strLen]); err != nil {
 			buf.Reset()
-			return "", nil, err
+			return "", 0, nil, err
 		}
 		s = buf.String()
 		buf.Reset() // be nice to GC
 	}
-	return s, p[strLen:], nil
+	return s, c + strLen, p[strLen:], nil
 }

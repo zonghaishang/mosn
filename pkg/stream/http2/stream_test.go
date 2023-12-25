@@ -92,8 +92,10 @@ func TestDirectResponse(t *testing.T) {
 
 	sc := newServerStreamConnection(ctx, connection, nil).(*serverStreamConnection)
 	h2s, _, _, _, err := sc.sc.HandleFrame(ctx, mh)
-	h2s.Response = &http.Response{
-		Header: map[string][]string{},
+	h2s.Response = &mhttp2.ResponseWrapper{
+		Rsp: &http.Response{
+			Header: map[string][]string{},
+		},
 	}
 	if err != nil {
 		t.Fatalf("handleFrame failed: %v", err)
@@ -350,7 +352,7 @@ func TestClientH2ReqUseStream(t *testing.T) {
 			HeaderMap: &phttp2.HeaderMap{
 				H: req.Header,
 			},
-			Req: req,
+			Wrap: &mhttp2.RequestWrapper{Req: req},
 		}, false)
 		assert.Nil(t, err)
 		clientStream.AppendTrailers(ctx, nil)
@@ -442,7 +444,7 @@ func TestClientH2RespUseStream(t *testing.T) {
 
 	for _, testcase := range testcases {
 		ctx = sc.cm.Get()
-		mClientStream, _ := sc.mClientConn.WriteHeaders(ctx, req, "", false)
+		mClientStream, _ := sc.mClientConn.WriteHeaders(ctx, &mhttp2.RequestWrapper{Req: req}, "", false)
 		testcase.dataFrame.StreamID = mClientStream.ID
 		sClientStream := sc.NewStream(ctx, streamReceiver).(*clientStream)
 		sClientStream.id = mClientStream.ID
@@ -554,7 +556,7 @@ func TestServerH2RespUseStream(t *testing.T) {
 			HeaderMap: &phttp2.HeaderMap{
 				H: rsp.Header,
 			},
-			Rsp: rsp,
+			Wrap: &mhttp2.ResponseWrapper{Rsp: rsp},
 		}, false)
 		assert.Nil(t, err)
 		serverStream.AppendTrailers(sctx, nil)

@@ -26,6 +26,7 @@ import (
 	"os"
 	"reflect"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,6 +59,19 @@ const (
 	SOL_IP         = 0x0
 	IP_TRANSPARENT = 0x13
 )
+
+var DefaultWriteLoopBufferSize = 8
+
+func init() {
+	writeBufferSize := os.Getenv("WRITE_LOOP_BUFFER_COUNT")
+	if len(writeBufferSize) > 0 {
+		overrideBufferSize, err := strconv.Atoi(writeBufferSize)
+		if err == nil && overrideBufferSize > 0 {
+			DefaultWriteLoopBufferSize = overrideBufferSize
+			log.DefaultLogger.Infof("[network] connection buffer count = %d", DefaultWriteLoopBufferSize)
+		}
+	}
+}
 
 // Factory function for creating server side connection.
 type ServerConnFactory func(ctx context.Context, rawc net.Conn, stopChan chan struct{}) api.Connection
@@ -176,7 +190,7 @@ func newServerConnection(ctx context.Context, rawc net.Conn, stopChan chan struc
 		connected:        1,
 		readEnabledChan:  make(chan bool, 1),
 		internalStopChan: make(chan struct{}),
-		writeBufferChan:  make(chan *[]buffer.IoBuffer, 8),
+		writeBufferChan:  make(chan *[]buffer.IoBuffer, DefaultWriteLoopBufferSize),
 		writeSchedChan:   make(chan bool, 1),
 		transferChan:     make(chan uint64),
 		network:          rawc.LocalAddr().Network(),
@@ -376,7 +390,7 @@ func (c *connection) attachEventLoop(lctx context.Context) {
 
 // this function must return false always, and return true just for test.
 func (c *connection) checkUseWriteLoop() bool {
-	return false
+	return true
 	/*
 		// if return false, and connection just use write directly.
 		// if return true, and connection remote address is loopback
@@ -1108,7 +1122,7 @@ func newClientConnection(connectTimeout time.Duration, tlsMng types.TLSClientCon
 			readEnabled:      true,
 			readEnabledChan:  make(chan bool, 1),
 			internalStopChan: make(chan struct{}),
-			writeBufferChan:  make(chan *[]buffer.IoBuffer, 8),
+			writeBufferChan:  make(chan *[]buffer.IoBuffer, DefaultWriteLoopBufferSize),
 			writeSchedChan:   make(chan bool, 1),
 			stats: &types.ConnectionStats{
 				ReadTotal:     metrics.NewCounter(),
